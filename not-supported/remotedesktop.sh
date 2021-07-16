@@ -43,8 +43,8 @@ If you have already installed a desktop environment, you will not need to instal
         then
             # Install gnome-session
             print_text_in_color "$ICyan" "Installing gnome-session..."
-            apt update -q4 & spinner_loading
-            apt install gnome-session --no-install-recommends -y
+            apt-get update -q4 & spinner_loading
+            apt-get install gnome-session --no-install-recommends -y
             sudo -u "$UNIXUSER" dbus-launch gsettings set org.gnome.desktop.wm.preferences button-layout ":minimize,maximize,close"
             install_if_not gnome-shell-extension-dash-to-panel
             check_command sudo -u "$UNIXUSER" dbus-launch gnome-extensions enable dash-to-panel@jderose9.github.com
@@ -109,6 +109,9 @@ You should be able to connect via an RDP client with your server \
 using the credentials of $UNIXUSER and the server ip-address $ADDRESS"
 fi
 
+# Needed to be able to access Nextcloud via localhost directly
+nextcloud_occ_no_check config:system:set trusted_proxies "11" --value="localhost"
+
 # Eye of Gnome
 if is_this_installed eog
 then
@@ -131,6 +134,14 @@ then
     GEDIT_SWITCH=OFF
 else
     GEDIT_SWITCH=ON
+fi
+
+# grsync
+if is_this_installed grsync
+then
+    GRSYNC_SWITCH=OFF
+else
+    GRSYNC_SWITCH=ON
 fi
 
 # MakeMKV
@@ -191,6 +202,7 @@ $CHECKLIST_GUIDE" "$WT_HEIGHT" "$WT_WIDTH" 4 \
 "Eye of Gnome" "(Image Viewer)" "$EOG_SWITCH" \
 "Firefox" "(Internet Browser)" "$FIREFOX_SWITCH" \
 "Gedit" "(Text Editor)" "$GEDIT_SWITCH" \
+"Grsync" "(File sync)" "$GRSYNC_SWITCH" \
 "MakeMKV" "(Rip DVDs and Blu-rays)" "$MAKEMKV_SWITCH" \
 "Nautilus" "(File Manager)" "$NAUTILUS_SWITCH" \
 "OnlyOffice" "(Open Source Office Suite)" "$ONLYOFFICE_SWITCH" \
@@ -204,8 +216,12 @@ install_remove_packet() {
     if is_this_installed "$1"
     then
         print_text_in_color "$ICyan" "Uninstalling $2"
-        apt purge "$1" -y
-        apt autoremove -y
+        apt-get purge "$1" -y
+        if [ "$1" = "grsync" ]
+        then
+            apt-get purge gnome-themes-extra -y
+        fi
+        apt-get autoremove -y
         if [ "$1" = "nautilus" ]
         then
             rm -f /home/"$UNIXUSER"/.local/share/applications/org.gnome.Nautilus.desktop
@@ -230,6 +246,9 @@ install_remove_packet() {
         elif [ "$1" = "vlc" ]
         then
             sudo sed -i 's|geteuid|getppid|' /usr/bin/vlc
+        elif [ "$1" = "grsync" ]
+        then
+            install_if_not gnome-themes-extra
         fi
         print_text_in_color "$ICyan" "$2 was successfully installed"
     fi
@@ -242,19 +261,19 @@ case "$choice" in
 as well as the gnome desktop." "$SUBTITLE"
         if yesno_box_no "Do you want to do this?" "$SUBTITLE"
         then
-            APPS=(evince eog firefox gedit makemkv-oss makemkv-bin nautilus onlyoffice-desktopeditors picard sound-juicer \
-vlc acpid gnome-shell-extension-dash-to-panel gnome-shell-extension-arc-menu gnome-session xrdp)
+            APPS=(evince eog firefox gedit grsync gnome-themes-extra makemkv-oss makemkv-bin nautilus onlyoffice-desktopeditors \
+picard sound-juicer vlc acpid gnome-shell-extension-dash-to-panel gnome-shell-extension-arc-menu gnome-session xrdp)
             for app in "${APPS[@]}"
             do
                 if is_this_installed "$app"
                 then
-                    apt purge "$app" -y
+                    apt-get purge "$app" -y
                 fi
             done
-            apt autoremove -y
+            apt-get autoremove -y
             systemctl set-default multi-user
             add-apt-repository --remove ppa:heyarje/makemkv-beta -y
-            apt update -q4 & spinner_loading
+            apt-get update -q4 & spinner_loading
             rm -f /etc/polkit-1/localauthority/50-local.d/46-allow-update-repo.pkla
             rm -f /etc/polkit-1/localauthority/50-local.d/allow-update-repo.pkla
             rm -f /etc/polkit-1/localauthority/50-local.d/color.pkla
@@ -274,16 +293,19 @@ vlc acpid gnome-shell-extension-dash-to-panel gnome-shell-extension-arc-menu gno
     *"Gedit"*)
         install_remove_packet gedit Gedit
     ;;&
+    *"Grsync"*)
+        install_remove_packet grsync Grsync
+    ;;&
     *"MakeMKV"*)
         SUBTITLE="MakeMKV"
         if is_this_installed makemkv-oss || is_this_installed makemkv-bin
         then
             print_text_in_color "$ICyan" "Uninstalling $SUBTITLE"
-            apt purge makemkv-oss -y
-            apt purge makemkv-bin -y
-            apt autoremove -y
+            apt-get purge makemkv-oss -y
+            apt-get purge makemkv-bin -y
+            apt-get autoremove -y
             add-apt-repository --remove ppa:heyarje/makemkv-beta -y
-            apt update -q4 & spinner_loading
+            apt-get update -q4 & spinner_loading
             print_text_in_color "$ICyan" "$SUBTITLE was successfully uninstalled."
         else
             msg_box "MakeMKV is not open source. This is their official website: makemkv.com
@@ -293,8 +315,8 @@ We will need to add a 3rd party repository to install it which can set your serv
                 print_text_in_color "$ICyan" "Installing $SUBTITLE"
                 if add-apt-repository ppa:heyarje/makemkv-beta -y
                 then
-                    apt update -q4 & spinner_loading
-                    apt install makemkv-oss makemkv-bin -y
+                    apt-get update -q4 & spinner_loading
+                    apt-get install makemkv-oss makemkv-bin -y
                     print_text_in_color "$ICyan" "$SUBTITLE was successfully installed"
                 else
                     msg_box "Something failed while trying to add the new repository" "$SUBTITLE"
@@ -311,10 +333,10 @@ We will need to add a 3rd party repository to install it which can set your serv
         if is_this_installed onlyoffice-desktopeditors
         then
             print_text_in_color "$ICyan" "Uninstalling $SUBTITLE"
-            apt purge onlyoffice-desktopeditors -y
-            apt autoremove -y
+            apt-get purge onlyoffice-desktopeditors -y
+            apt-get autoremove -y
             rm -f /etc/apt/sources.list.d/onlyoffice-desktopeditors.list
-            apt update -q4 & spinner_loading
+            apt-get update -q4 & spinner_loading
             print_text_in_color "$ICyan" "$SUBTITLE was successfully uninstalled."
         else
             msg_box "OnlyOffice Desktop Editors are open source but not existing in the Ubuntu repositories.
@@ -327,7 +349,7 @@ This can set your server under risk, though!" "$SUBTITLE"
                 apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys CB2DE8E5
                 echo "deb https://download.onlyoffice.com/repo/debian squeeze main" \
 > /etc/apt/sources.list.d/onlyoffice-desktopeditors.list
-                apt update -q4 & spinner_loading
+                apt-get update -q4 & spinner_loading
                 install_if_not onlyoffice-desktopeditors
                 print_text_in_color "$ICyan" "$SUBTITLE was successfully installed"
             fi

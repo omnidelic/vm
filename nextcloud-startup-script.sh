@@ -110,6 +110,7 @@ Since the Home/SME server is equipped with a Wi-Fi module, you will now be asked
 Please note: It's not recommended to run a server on Wi-Fi; using an ethernet cable is always the best."
     if yesno_box_yes "Do you want to enable Wi-Fi on this server?"
     then
+        install_if_not network-manager
         nmtui
     fi
         if network_ok
@@ -161,22 +162,18 @@ nc_update
 DEBUG=0
 debug_mode
 
-# Nextcloud 20 is required until 21.0.3 is out. Then NC 21 will be required.
-lowest_compatible_nc 20
+# Nextcloud 21 is required
+lowest_compatible_nc 21
 
 # Import if missing and export again to import it with UUID
 zpool_import_if_missing
 
-# Set phone region
-if [ "${CURRENTVERSION%%.*}" -ge "21" ]
+# Set phone region (needs the latest KEYBOARD_LAYOUT from lib)
+# shellcheck source=lib.sh
+source /var/scripts/fetch_lib.sh
+if [ -n "$KEYBOARD_LAYOUT" ]
 then
-    # Set phone region (needs the latest KEYBOARD_LAYOUT from lib)
-    # shellcheck source=lib.sh
-    source /var/scripts/fetch_lib.sh
-    if [ -n "$KEYBOARD_LAYOUT" ]
-    then
-        nextcloud_occ config:system:set default_phone_region --value="$KEYBOARD_LAYOUT"
-    fi
+    nextcloud_occ config:system:set default_phone_region --value="$KEYBOARD_LAYOUT"
 fi
 
 # Is this run as a pure root user?
@@ -492,6 +489,8 @@ rm -f "$SCRIPTS/server_configuration.sh"
 rm -f "$SCRIPTS/nextcloud_configuration.sh"
 rm -f "$SCRIPTS/additional_apps.sh"
 rm -f "$SCRIPTS/adduser.sh"
+rm -f "$SCRIPTS/desec.sh"
+rm -f "$SCRIPTS/activate-tls.sh"
 rm -f "$NCDATA"/*.log
 
 find /root "/home/$UNIXUSER" -type f \( -name '*.sh*' -o -name '*.html*' -o -name '*.tar*' -o -name 'results' -o -name '*.zip*' \) -delete
@@ -539,15 +538,15 @@ print_text_in_color "$ICyan" "System will now upgrade..."
 bash $SCRIPTS/update.sh minor
 
 # Cleanup 2
-apt autoremove -y
-apt autoclean
+apt-get autoremove -y
+apt-get autoclean
 
 # Set trusted domain in config.php
 run_script NETWORK trusted
 
 # Remove preference for IPv4
 rm -f /etc/apt/apt.conf.d/99force-ipv4 
-apt update
+apt-get update
 
 # Success!
 msg_box "The installation process is *almost* done.

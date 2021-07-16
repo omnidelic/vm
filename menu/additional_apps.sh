@@ -41,20 +41,20 @@ $CHECKLIST_GUIDE\n\n$RUN_LATER_GUIDE" "$WT_HEIGHT" "$WT_WIDTH" 4 \
 "Documentserver" "(OnlyOffice or Collabora - Docker or Integrated)" OFF \
 "Bitwarden" "(External password manager)" OFF \
 "Fail2ban  " "(Extra Bruteforce protection)" "$STARTUP_SWITCH" \
-"Adminer" "(PostgreSQL GUI)" OFF \
-"ClamAV" "(Antivirus for Nextcloud and files)" OFF \
-"Extract" "(Archive extraction for Nextcloud)" OFF \
-"Netdata" "(Real-time server monitoring in Web GUI)" OFF \
-"BPYTOP" "(Real-time server monitoring in CLI)" OFF \
-"Midnight Commander" "(CLI file manager)" OFF \
-"FullTextSearch" "(Elasticsearch for Nextcloud [2GB RAM])" OFF \
-"Pico CMS" "(Leightweight CMS integration in Nextcloud)" OFF \
 "PreviewGenerator" "(Pre-generate previews for Nextcloud)" "$STARTUP_SWITCH" \
-"Notify Push" "(High Performance Files Backend for Nextcloud)" OFF \
-"LDAP" "(Windows Active directory for Nextcloud)" OFF \
-"Talk" "(Video calls and chat for Nextcloud)" OFF \
 "Webmin" "(Server GUI like Cpanel)" "$STARTUP_SWITCH" \
+"Adminer" "(PostgreSQL GUI)" OFF \
+"LDAP" "(Windows Active directory for Nextcloud)" OFF \
+"Notify Push" "(High Performance Files Backend for Nextcloud)" OFF \
+"Talk" "(Video calls and chat for Nextcloud)" OFF \
+"Netdata" "(Real-time server monitoring in Web GUI)" OFF \
+"FullTextSearch" "(Elasticsearch for Nextcloud [2GB RAM])" OFF \
+"BPYTOP" "(Real-time server monitoring in CLI)" OFF \
+"ClamAV" "(Antivirus for Nextcloud and files)" OFF \
+"Midnight Commander" "(CLI file manager)" OFF \
+"Pico CMS" "(Lightweight CMS integration in Nextcloud)" OFF \
 "Whiteboard" "(Whiteboard for Nextcloud)" OFF \
+"Extract" "(Archive extraction for Nextcloud)" OFF \
 "Face Recognition" "(Scan your photos for faces in Nextcloud)" OFF \
 "SMB-mount" "(Mount SMB-shares from your local network)" OFF 3>&1 1>&2 2>&3)
 

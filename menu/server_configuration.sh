@@ -16,14 +16,6 @@ debug_mode
 # Must be root
 root_check
 
-# Set the correct switch for activate_tls
-if [ -f $SCRIPTS/activate-tls.sh ]
-then
-    ACTIVATE_TLS_SWITCH="ON"
-else
-    ACTIVATE_TLS_SWITCH="OFF"
-fi
-
 # Set the startup switch
 if [ -f "$SCRIPTS/nextcloud-startup-script.sh" ]
 then
@@ -46,15 +38,15 @@ fi
 choice=$(whiptail --title "$TITLE" --checklist \
 "Choose what you want to configure
 $CHECKLIST_GUIDE\n\n$RUN_LATER_GUIDE" "$WT_HEIGHT" "$WT_WIDTH" 4 \
-"Static IP" "(Set static IP in Ubuntu with netplan.io)" OFF \
-"Security" "(Add extra security based on this http://goo.gl/gEJHi7)" OFF \
 "deSEC" "(Automatically set up a dedyn.io domain, together with DDNS and TLS)" "$STARTUP_SWITCH" \
 "DDclient Configuration" "(Use ddclient for automatic DDNS updates)" OFF \
-"Activate TLS" "(Enable HTTPS with Let's Encrypt)" "$ACTIVATE_TLS_SWITCH" \
-"GeoBlock" "(Only allow certain countries to access your server)" OFF \
-"Automatic updates" "(Automatically update your server every week on Sundays)" OFF \
+"Activate TLS" "(Enable HTTPS with Let's Encrypt)" "$STARTUP_SWITCH" \
 "SMTP Mail" "(Enable being notified by mail from your server)" OFF \
+"Static IP" "(Set static IP in Ubuntu with netplan.io)" OFF \
+"Automatic updates" "(Automatically update your server every week on Sundays)" OFF \
+"GeoBlock" "(Only allow certain countries to access your server)" OFF \
 "Disk Monitoring" "(Check for S.M.A.R.T errors on your disks)" OFF \
+"Extra Security" "(Add extra security to prevent attacks)" OFF \
 "Daily Backup Wizard" "([BETA] Create a Daily Backup script)" OFF 3>&1 1>&2 2>&3)
 
 case "$choice" in
@@ -62,8 +54,8 @@ case "$choice" in
         print_text_in_color "$ICyan" "Downloading the Static IP script..."
         run_script NETWORK static_ip
     ;;&
-    *"Security"*)
-        print_text_in_color "$ICyan" "Downloading the Security script..."
+    *"Extra Security"*)
+        print_text_in_color "$ICyan" "Downloading the Extra Security script..."
         run_script ADDONS security
     ;;&
     *"deSEC"*)
@@ -100,11 +92,10 @@ https://www.techandme.se/open-port-80-443/" "$SUBTITLE"
                     bash $SCRIPTS/activate-tls.sh
                 else
                     print_text_in_color "$ICyan" "Downloading the Let's Encrypt script..."
-                    download_script LETS_ENC activate-tls
-                    bash $SCRIPTS/activate-tls.sh
+                    run_script LETS_ENC activate-tls
                 fi
             else
-                msg_box "OK, but if you want to run it later, just type: sudo bash $SCRIPTS/activate-tls.sh" "$SUBTITLE"
+                msg_box "OK, but if you want to run it later, just type: sudo bash $SCRIPTS/menu.sh --> Server Configuration --> Activate TLS" "$SUBTITLE"
             fi
             
             # Just make sure it is gone

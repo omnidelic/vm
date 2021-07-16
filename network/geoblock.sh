@@ -32,16 +32,12 @@ else
     # Removal
     find /var/scripts -type f -regex \
 "$SCRIPTS/202[0-9]-[01][0-9]-Maxmind-Country-IPv[46]\.dat" -delete
-    if is_this_installed jq
-    then
-        apt purge jq -y
-    fi
     if is_this_installed libapache2-mod-geoip
     then
         a2dismod geoip
-        apt purge libapache2-mod-geoip -y
+        apt-get purge libapache2-mod-geoip -y
     fi
-    apt autoremove -y
+    apt-get autoremove -y
     sed -i "/^#Geoip-block-start/,/^#Geoip-block-end/d" /etc/apache2/apache2.conf
     check_command systemctl restart apache2
     # Show successful uninstall if applicable
@@ -75,7 +71,7 @@ fi
 if [[ "$choice" = *"Countries"* ]]
 then
     # Download csv file
-    if ! curl_to_dir "https://dev.maxmind.com/static/csv/codes" "iso3166.csv" "$SCRIPTS"
+    if ! curl_to_dir "https://dev.maxmind.com/csv-files/codes" "iso3166.csv" "$SCRIPTS"
     then
         msg_box "Could not download the iso3166.csv file.
 Please report this to $ISSUES"

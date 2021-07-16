@@ -155,6 +155,19 @@ then
     fi
 fi
 
+# Test if btrfs volume
+if grep " $BACKUP_MOUNTPOINT " /etc/mtab | grep -q btrfs
+then
+    IS_BTRFS_PART=1
+    mkdir -p "$BACKUP_MOUNTPOINT/.snapshots"
+    btrfs subvolume snapshot -r "$BACKUP_MOUNTPOINT" "$BACKUP_MOUNTPOINT/.snapshots/@$CURRENT_DATE"
+    while [ "$(find "$BACKUP_MOUNTPOINT/.snapshots/" -maxdepth 1 -mindepth 1 -type d -name '@*_*' | wc -l)" -gt 4 ]
+    do
+        DELETE_SNAP="$(find "$BACKUP_MOUNTPOINT/.snapshots/" -maxdepth 1 -mindepth 1 -type d -name '@*_*' | sort | head -1)"
+        btrfs subvolume delete "$DELETE_SNAP"
+    done
+fi
+
 # Send mail that backup was started
 if ! send_mail "Off-shore backup started!" "You will be notified again when the backup is finished!
 Please don't restart or shutdown your server until then!"
@@ -188,6 +201,27 @@ then
     send_error_mail "Something failed during the rsync job."
 fi
 
+# Adjust permissions and scrub volume
+if [ -n "$IS_BTRFS_PART" ]
+then
+    inform_user "$ICyan" "Adjusting permissions..."
+    find "$BACKUP_MOUNTPOINT/" -not -path "$BACKUP_MOUNTPOINT/.snapshots/*" \
+\( ! -perm 600 -o ! -group root -o ! -user root \) -exec chmod 600 {} \; -exec chown root:root {} \;
+    inform_user "$ICyan" "Making sure that all data is written out correctly by waiting 10 min..."
+    # This fixes an issue where checksums are not yet created before the scrub command runs which then reports checksum errors
+    if ! sleep 10m
+    then
+        re_rename_snapshot
+        send_error_mail "Some errors were reported while waiting for the data to get written out."
+    fi
+    inform_user "$ICyan" "Scrubbing BTRFS partition..."
+    if ! btrfs scrub start -B "$BACKUP_MOUNTPOINT"
+    then
+        re_rename_snapshot
+        send_error_mail "Some errors were reported while scrubbing the BTRFS partition."
+    fi
+fi
+
 # Rename the snapshot back to normal
 if ! re_rename_snapshot
 then
@@ -199,14 +233,14 @@ show_drive_usage
 
 # Unmount the backup drive
 inform_user "$ICyan" "Unmounting the off-shore backup drive..."
-if ! umount "$BACKUP_MOUNTPOINT"
+if mountpoint -q "$BACKUP_MOUNTPOINT" && ! umount "$BACKUP_MOUNTPOINT"
 then
     send_error_mail "Could not unmount the off-shore backup drive!"
 fi
 
 # Unmount the backup drive
 inform_user "$ICyan" "Unmounting the daily backup drive..."
-if ! umount "$BACKUP_SOURCE_MOUNTPOINT"
+if mountpoint -q "$BACKUP_SOURCE_MOUNTPOINT" && ! umount "$BACKUP_SOURCE_MOUNTPOINT"
 then
     send_error_mail "Could not unmount the daily backup drive!"
 fi

@@ -156,8 +156,8 @@ then
 
     # Logs
     LogLevel warn
-    CustomLog ${APACHE_LOG_DIR}/access.log combined
-    ErrorLog ${APACHE_LOG_DIR}/error.log
+    CustomLog \${APACHE_LOG_DIR}/access.log combined
+    ErrorLog \${APACHE_LOG_DIR}/error.log
 
     DocumentRoot $NCPATH
 
@@ -220,12 +220,61 @@ if [ -n "$DEDYNDOMAIN" ]
 then
     print_text_in_color "$ICyan" "Renewing TLS with DNS, please don't abort the hook, it may take a while..."
     # Renew with DNS by default
-    if certbot certonly --manual --text --rsa-key-size 4096 --renew-by-default --server https://acme-v02.api.letsencrypt.org/directory no-eff-email --agree-tos --preferred-challenges dns --manual-auth-hook "$SCRIPTS"/deSEC/hook.sh --manual-cleanup-hook "$SCRIPTS"/deSEC/hook.sh -d "$DEDYNDOMAIN"
+    if certbot certonly --manual --text --rsa-key-size 4096 --renew-by-default --server https://acme-v02.api.letsencrypt.org/directory --no-eff-email --agree-tos --preferred-challenges dns --manual-auth-hook "$SCRIPTS"/deSEC/hook.sh --manual-cleanup-hook "$SCRIPTS"/deSEC/hook.sh -d "$DEDYNDOMAIN"
     then
         # Generate DHparams cipher
         if [ ! -f "$DHPARAMS_TLS" ]
         then
             openssl dhparam -dsaparam -out "$DHPARAMS_TLS" 4096
+        fi
+        # Choose which port for public access
+        msg_box "You will now be able to choose which port you want to put your Nextcloud on for public access.\n
+The default port is 443 for HTTPS and if you don't change port, that's the port we will use.\n
+Please keep in mind NOT to use the following ports as they are likely in use already:
+${NONO_PORTS[*]}"
+        if yesno_box_no "Do you want to change the default HTTPS port (443) to something else?"
+        then
+            # Ask for port
+            while :
+            do
+                DEDYNPORT=$(input_box_flow "Please choose which port you want between 1024 - 49151.\n\nPlease remember to open this port in your firewall.")
+                if (("$DEDYNPORT" >= 1024 && "$DEDYNPORT" <= 49151))
+                then
+                    if check_nono_ports "$DEDYNPORT"
+                    then
+                        print_text_in_color "$ICyan" "Changing to port $DEDYNPORT for public access..."
+                        # Main port
+                        sed -i "s|VirtualHost \*:443|VirtualHost \*:$DEDYNPORT|g" "$tls_conf"
+                        if ! grep -q "Listen $DEDYNPORT" /etc/apache2/ports.conf
+                        then
+                            echo "Listen $DEDYNPORT" >> /etc/apache2/ports.conf
+                        fi
+                        # HTTP redirect
+                        if ! grep -q '{HTTP_HOST}':"$DEDYNPORT" "$tls_conf"
+                        then
+                            sed -i "s|{HTTP_HOST}|{HTTP_HOST}:$DEDYNPORT|g" "$tls_conf"
+                        fi
+                        # Test everything
+                        check_command bash "$SCRIPTS/test-new-config.sh" "$TLSDOMAIN.conf"
+                        if restart_webserver
+                        then
+                            msg_box "Congrats! You should now be able to access Nextcloud publicly on: https://$TLSDOMAIN:$DEDYNPORT, after you opened port $DEDYNPORT in your firewall."
+                            break
+                        fi
+                    fi
+                else
+                    msg_box "The port number needs to be between 1024 - 49151, please try again."
+                fi
+            done
+        else
+            if [ -f "$SCRIPTS/test-new-config.sh" ]
+            then
+                check_command bash "$SCRIPTS/test-new-config.sh" "$TLSDOMAIN.conf"
+                if restart_webserver
+                then
+                    msg_box "Congrats! You should now be able to access Nextcloud publicly on: https://$TLSDOMAIN after you opened port 443 in your firewall."
+                fi
+            fi
         fi
     fi
 else
@@ -240,6 +289,14 @@ else
             fi
             # Activate new config
             check_command bash "$SCRIPTS/test-new-config.sh" "$TLSDOMAIN.conf"
+            msg_box "This cert will expire in 90 days if you don't renew it.
+There are several ways of renewing this cert and here are some tips and tricks:
+https://goo.gl/c1JHR0
+To do your job a little bit easier we have added a auto renew script as a cronjob.
+If you need to edit the crontab please type: crontab -u root -e
+If you need to edit the script itself, please check: $SCRIPTS/letsencryptrenew.sh
+Feel free to contribute to this project: https://goo.gl/3fQD65"
+
             msg_box "Please remember to keep port 80 (and 443) open so that Let's Encrypt can do \
 the automatic renewal of the cert. If port 80 is closed the cert will expire in 3 months.
 You don't need to worry about security as port 80 is directly forwarded to 443, so \

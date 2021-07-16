@@ -48,12 +48,13 @@ then
 fi
 
 # Find mounts
+print_text_in_color "$ICyan" "Getting all valid mounts. This can take a while..."
 DIRECTORIES=$(find /mnt/ -mindepth 1 -maxdepth 2 -type d | grep -v "/mnt/ncdata")
 mapfile -t DIRECTORIES <<< "$DIRECTORIES"
 for directory in "${DIRECTORIES[@]}"
 do
     if mountpoint -q "$directory" && [ "$(stat -c '%a' "$directory")" = "770" ] \
-&& [ "$(stat -c '%U' "$directory")" = "www-data" ] && [ "$(stat -c '%G' "$directory")" = "www-data" ]
+&& [ "$(stat -c '%U' "$directory")" = "$WEB_USER" ] && [ "$(stat -c '%G' "$directory")" = "$WEB_GROUP" ]
     then
         MOUNTS+=("$directory/")
     fi
@@ -116,19 +117,13 @@ fi
 # Samba stop function
 samba_stop() {
     print_text_in_color "$ICyan" "Stopping the SMB-server..."
-    service smbd stop
-    update-rc.d smbd disable
-    update-rc.d nmbd disable
+    systemctl stop smbd
 }
 
 # Samba start function
 samba_start() {
     print_text_in_color "$ICyan" "Starting the SMB-server..."
-    update-rc.d smbd defaults
-    update-rc.d smbd enable
-    service smbd restart
-    update-rc.d nmbd enable
-    service nmbd restart
+    systemctl start smbd
 }
 
 # Get SMB users
@@ -268,8 +263,18 @@ Please note that this option could be a security risk, if the chosen password wa
     OC_PASS="$PASSWORD"
     unset PASSWORD
     export OC_PASS
-    check_command su -s /bin/sh www-data -c "php $NCPATH/occ user:add $NEWNAME --password-from-env"
+    check_command su -s /bin/sh "$WEB_USER" -c "php $NCPATH/occ user:add $NEWNAME --password-from-env"
     unset OC_PASS
+
+    # Create files directory for that user
+    if ! [ -d "$NCDATA" ]
+    then
+        msg_box "Something is wrong: $NCDATA does not exist." "$SUBTITLE"
+        return
+    fi
+    mkdir -p "$NCDATA/$NEWNAME/files"
+    chown -R "$WEB_USER":"$WEB_GROUP" "$NCDATA/$NEWNAME"
+    chmod -R 770 "$NCDATA/$NEWNAME"
 
     # Inform the user
     msg_box "The new Nextcloud user $NEWNAME was successfully created." "$SUBTITLE"
@@ -406,8 +411,6 @@ do
 
         # Change it to the new one if correct
         check_command echo -e "$PASSWORD\n$PASSWORD" | smbpasswd -s -a "$user"
-        HASH="$(echo -n "$PASSWORD" | sha256sum | awk '{print $1}')"
-        echo "$HASH" >> "$HASH_HISTORY"
 
         # Inform the user
         msg_box "The password for $user was successfully changed." "$SUBTITLE"
@@ -443,7 +446,7 @@ No chance to change the password of the Nextcloud account." "$SUBTITLE"
         OC_PASS="$PASSWORD"
         unset PASSWORD
         export OC_PASS
-        check_command su -s /bin/sh www-data -c "php $NCPATH/occ user:resetpassword $user --password-from-env"
+        check_command su -s /bin/sh "$WEB_USER" -c "php $NCPATH/occ user:resetpassword $user --password-from-env"
         unset OC_PASS
 
         # Inform the user
@@ -557,10 +560,9 @@ local mount
 local LOCALDIRECTORIES
 
 # Find usable directories
-LOCALDIRECTORIES=$(find /mnt/ -mindepth 1 -maxdepth 3 -type d | grep -v "/mnt/ncdata")
 for mount in "${MOUNTS[@]}"
 do
-    VALID_DIRS+="$mount\n"
+    LOCALDIRECTORIES=$(find "$mount" -maxdepth 2 -type d | grep -v '/.snapshots')
     VALID_DIRS+="$(echo -e "$LOCALDIRECTORIES" | grep "^$mount")\n"
 done
 while :
@@ -577,6 +579,13 @@ If you don't know any, and you want to cancel, just type in 'exit' and press [EN
         if echo "$NEWPATH" | grep -q "^$mount"
         then
             VALID=1
+            if grep " ${mount%/} " /etc/mtab | grep -q btrfs
+            then
+                BTRFS_ROOT_DIR="$mount"
+            else
+                BTRFS_ROOT_DIR=""
+            fi
+            break
         fi
     done
     if [ "$NEWPATH" = "exit" ]
@@ -734,13 +743,24 @@ create_share() {
     directory mask = 0770
     force create mode = 0770
     force directory mode = 0770
-    vfs objects = recycle
     recycle:repository = .recycle
+    recycle:touch = true
     recycle:keeptree = yes
     recycle:versions = yes
     recycle:directory_mode = 0770
-#SMB$count-end - Please don't remove or change this line
 EOF
+            if [ -n "$BTRFS_ROOT_DIR" ]
+            then
+                local SHADOW_COPY=", shadow_copy2, btrfs"
+                cat >> "$SMB_CONF" <<EOF
+    shadow:format = @%Y%m%d_%H%M%S  
+    shadow:sort = desc
+    shadow:snapdir = $BTRFS_ROOT_DIR.snapshots
+    shadow:localtime = yes
+EOF
+            fi
+            echo "    vfs objects = recycle$SHADOW_COPY" >> "$SMB_CONF"
+            echo "#SMB$count-end - Please don't remove or change this line" >> "$SMB_CONF"
             samba_start
             break
         else
@@ -917,7 +937,7 @@ We please you to do the math yourself if the number is high enough for your setu
 
     # Create syslog for files_inotify
     touch "$VMLOGS"/files_inotify.log
-    chown www-data:www-data "$VMLOGS"/files_inotify.log
+    chown "$WEB_USER":"$WEB_GROUP" "$VMLOGS"/files_inotify.log
 
     # Inform the user
     if [ -n "$INOTIFY_INSTALL" ]
@@ -954,10 +974,10 @@ files_inotify app and set up the cronjob for this external storage."
 
     # Add crontab for this external storage
     print_text_in_color "$ICyan" "Generating crontab..."
-    crontab -u www-data -l | { cat; echo "@reboot sleep 20 && php -f $NCPATH/occ files_external:notify -v $MOUNT_ID >> $VMLOGS/files_inotify.log"; } | crontab -u www-data -
+    crontab -u "$WEB_USER" -l | { cat; echo "@reboot sleep 20 && php -f $NCPATH/occ files_external:notify -v $MOUNT_ID >> $VMLOGS/files_inotify.log"; } | crontab -u "$WEB_USER" -
 
     # Run the command in a subshell and don't exit if the smbmount script exits
-    nohup sudo -u www-data php "$NCPATH"/occ files_external:notify -v "$MOUNT_ID" >> $VMLOGS/files_inotify.log &
+    nohup sudo -u "$WEB_USER" php "$NCPATH"/occ files_external:notify -v "$MOUNT_ID" >> $VMLOGS/files_inotify.log &
     
     # Inform the user
     msg_box "Congratulations, everything was successfully installed and setup.
@@ -1113,6 +1133,17 @@ you want to use for that SMB-share $SELECTED_SHARE." "$SUBTITLE"
             chown -R "$WEB_USER":"$WEB_GROUP" "$NEWPATH"
             NEWPATH=${NEWPATH//\//\\/}
             STORAGE=$(echo "$STORAGE" | sed "/path = /s/path.*/path = $NEWPATH/")
+            STORAGE=$(echo "$STORAGE" | grep -v "^    shadow:")
+            if [ -z "$BTRFS_ROOT_DIR" ]
+            then
+                STORAGE=$(echo "$STORAGE" | sed "/vfs objects = /s/vfs objects =.*/vfs objects = recycle/")
+            else
+                STORAGE=$(echo "$STORAGE" | sed "/vfs objects = /s/vfs objects =.*/vfs objects = recycle, shadow_copy2, btrfs/")
+                STORAGE=$(echo "$STORAGE" | sed '/vfs objects =/a\ \ \ \ shadow:format = @%Y%m%d_%H%M%S')
+                STORAGE=$(echo "$STORAGE" | sed '/vfs objects =/a\ \ \ \ shadow:sort = desc')
+                STORAGE=$(echo "$STORAGE" | sed "/vfs objects =/a\ \ \ \ shadow:snapdir = $BTRFS_ROOT_DIR.snapshots")
+                STORAGE=$(echo "$STORAGE" | sed '/vfs objects =/a\ \ \ \ shadow:localtime = yes')
+            fi
         ;;&
         *"Change valid SMB-users"*)
             if ! choose_users "Please choose the SMB-users \
@@ -1269,6 +1300,179 @@ $MENU_GUIDE" "$WT_HEIGHT" "$WT_WIDTH" 4 \
 done  
 }
 
+automatically_empty_recycle_bins() {
+    local SUBTITLE="Automatically empty recycle bins"
+    local count
+    local TEST=""
+
+    # Ask for removal
+    if crontab -u root -l | grep -q "$SCRIPTS/recycle-bin-cleanup.sh"
+    then
+        if yesno_box_yes "It seems like automatic recycle bin cleanup is already configured. Do you want to disable it?" "$SUBTITLE"
+        then
+            crontab -u root -l | grep -v "$SCRIPTS/recycle-bin-cleanup.sh" | crontab -u root -
+            rm -rf "$SCRIPTS/recycle-bin-cleanup.sh"
+            msg_box "Automatic recycle bin cleanup was successfully disabled." "$SUBTITLE"
+        fi
+        return
+    fi
+
+    # Ask for installation
+    msg_box "Automatic recycle bin cleanup does clean up all recycle bin folders automatically in the background.
+It gets executed every day and cleans old files in the recycle bin folders that were deleted more than 2 days ago." "$SUBTITLE"
+    if ! yesno_box_yes "Do you want to enable automatic recycle bin cleanup?" "$SUBTITLE"
+    then
+        return
+    fi
+
+    # Adjust some things
+    count=1
+    while [ $count -le $MAX_COUNT ]
+    do
+        CACHE=$(sed -n "/^#SMB$count-start/,/^#SMB$count-end/p" "$SMB_CONF")
+        if [ -n "$CACHE" ]
+        then
+            TEST+="SMB$count"
+            if ! echo "$CACHE" | grep -q 'recycle:touch'
+            then
+                CACHE=$(echo "$CACHE" | sed "/recycle:repository/a \ \ \ \ recycle:touch = true")
+                sed -i "/^#SMB$count-start/,/^#SMB$count-end/d" "$SMB_CONF"
+                echo -e "\n$CACHE" >> "$SMB_CONF"
+            fi
+        fi
+        count=$((count+1))
+    done
+
+    # Return if none created
+    if [ -z "$TEST" ]
+    then
+        msg_box "No SMB-share created. Please create a SMB-share first." "$SUBTITLE"
+        return
+    else
+        systemctl restart smbd
+    fi
+
+    # Execute
+    cat << AUTOMATIC_CLEANUP > "$SCRIPTS/recycle-bin-cleanup.sh"
+#!/bin/bash
+
+# Secure the file
+chown root:root "$SCRIPTS/recycle-bin-cleanup.sh"
+chmod 700 "$SCRIPTS/recycle-bin-cleanup.sh"
+
+count=1
+while [ \$count -le $MAX_COUNT ]
+do
+    CACHE=\$(sed -n "/^#SMB\$count-start/,/^#SMB\$count-end/p" "$SMB_CONF")
+    if [ -n "\$CACHE" ]
+    then
+        SMB_PATH=\$(echo "\$CACHE" | grep "path =" | grep -oP '/.*')
+        if [ -d "\$SMB_PATH" ] && [ -d "\$SMB_PATH/.recycle/" ]
+        then
+            find "\$SMB_PATH/.recycle/" -type f -atime +2 -delete
+        fi
+    fi
+    count=\$((count+1))
+done
+AUTOMATIC_CLEANUP
+
+    # Secure the file
+    chown root:root "$SCRIPTS/recycle-bin-cleanup.sh"
+    chmod 700 "$SCRIPTS/recycle-bin-cleanup.sh"
+
+    # Add cronjob
+    crontab -u root -l | grep -v "$SCRIPTS/recycle-bin-cleanup.sh" | crontab -u root -
+    crontab -u root -l | { cat; echo "@daily $SCRIPTS/recycle-bin-cleanup.sh >/dev/null"; } | crontab -u root -
+
+    # Show message
+    msg_box "Automatic recycle bin cleanup was successfully configured!" "$SUBTITLE"
+
+    # Allow to adjust Nextcloud to do the same
+    if yesno_box_yes "Do you want Nextcloud to delete files in its trashbin that were deleted more than 4 days ago \
+and file versions that were created more than 4 days ago, too?" "$SUBTITLE"
+    then
+        nextcloud_occ config:system:set trashbin_retention_obligation --value="auto, 4"
+        nextcloud_occ config:system:set versions_retention_obligation --value="auto, 4"
+        msg_box "Nextcloud was successfully configured to delete files in its trashbin that were deleted more than 4 days ago \
+and file versions that were created more than 4 days ago!" "$SUBTITLE"
+    fi
+}
+
+empty_recycle_bins() {
+    local count
+    local selected_options
+    local args
+    local TEST=""
+    local FOLDER_SIZE
+    local SMB_PATH
+    local SUBTITLE="Empty recycle bins"
+
+    # Show a list with available SMB-shares
+    args=(whiptail --title "$TITLE - $SUBTITLE" --separate-output --checklist \
+"Please select which recycle folders you want to empty.
+$CHECKLIST_GUIDE" "$WT_HEIGHT" "$WT_WIDTH" 4)
+    count=1
+    while [ $count -le $MAX_COUNT ]
+    do
+        CACHE=$(sed -n "/^#SMB$count-start/,/^#SMB$count-end/p" "$SMB_CONF")
+        if [ -n "$CACHE" ]
+        then
+            SMB_PATH="$(echo "$CACHE" | grep "path =" | grep -oP '/.*')/.recycle/"
+            if [ -d "$SMB_PATH" ]
+            then
+                FOLDER_SIZE="$(du -sh "$SMB_PATH" | awk '{print $1}')"
+            else
+                FOLDER_SIZE=0B
+            fi
+            args+=("$SMB_PATH" "$FOLDER_SIZE" ON)
+            TEST+="$SMB_PATH"
+        fi
+        count=$((count+1))
+    done
+
+    # Return if none created
+    if [ -z "$TEST" ]
+    then
+        msg_box "No SMB-share created. Please create a SMB-share first." "$SUBTITLE"
+        return
+    fi
+
+    # Show selected shares
+    selected_options=$("${args[@]}" 3>&1 1>&2 2>&3)
+    if [ -z "$selected_options" ]
+    then
+        msg_box "No option selected." "$SUBTITLE"
+        return
+    fi
+    mapfile -t selected_options <<< "$selected_options"
+    for element in "${selected_options[@]}"
+    do
+        print_text_in_color "$ICyan" "Emptying $element"
+        if [ -d "$element" ]
+        then
+            rm -r "$element"
+        fi
+    done
+    msg_box "All selected recycle folders were emptied!
+Please note: If you are using BTRFS as file system, it can take up to 54h until the space is released due to automatic snapshots." "$SUBTITLE"
+
+    # Allow to clean up Nextclouds trashbin, too
+    if yesno_box_no "Do you want to clean up Nextclouds trashbin, too?
+This will run the command 'occ trashbin:cleanup --all-users' for you if you select 'Yes'!" "$SUBTITLE"
+    then
+        nextcloud_occ trashbin:cleanup --all-users -vvv
+        msg_box "The cleanup of Nextclouds trashbin was successful!" "$SUBTITLE"
+    fi
+
+    # Allow to clean up Nextclouds versions, too
+    if yesno_box_no "Do you want to clean up all file versions in Nextcloud?
+This will run the command 'occ versions:cleanup' for you if you select 'Yes'!" "$SUBTITLE"
+    then
+        nextcloud_occ versions:cleanup -vvv
+        msg_box "The cleanup of all file versions in Nextcloud was successful!" "$SUBTITLE"
+    fi
+}
+
 # SMB-server Main Menu
 while :
 do
@@ -1276,15 +1480,23 @@ do
 "Choose what you want to do.
 $MENU_GUIDE" "$WT_HEIGHT" "$WT_WIDTH" 4 \
 "Open the SMB-user Menu" "(manage SMB-users)" \
-"Open the SMB-share Menu  " "(manage SMB-shares)" \
+"Open the SMB-share Menu" "(manage SMB-shares)" \
+"Automatically empty recycle bins  " "(Schedule cleanup of recycle folders)" \
+"Empty recycle bins" "(Clean up recycle folders)" \
 "Exit" "(exit this script)" 3>&1 1>&2 2>&3)
 
     case "$choice" in
         "Open the SMB-user Menu")
             user_menu
         ;;
-        "Open the SMB-share Menu  ")
+        "Open the SMB-share Menu")
             share_menu
+        ;;
+        "Automatically empty recycle bins  ")
+            automatically_empty_recycle_bins
+        ;;
+        "Empty recycle bins")
+            empty_recycle_bins
         ;;
         "Exit")
             break

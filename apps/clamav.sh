@@ -28,10 +28,10 @@ else
     # Ask for removal or reinstallation
     reinstall_remove_menu "$SCRIPT_NAME"
     # Removal
-    apt purge clamav-daemon -y
-    apt purge clamav-freshclam -y
-    apt purge clamav -y
-    apt autoremove -y
+    apt-get purge clamav-daemon -y
+    apt-get purge clamav-freshclam -y
+    apt-get purge clamav -y
+    apt-get autoremove -y
     rm -f /etc/systemd/system/clamav-daemon.service
     rm -f "$SCRIPTS"/clamav-fullscan.sh
     rm -f "$VMLOGS"/clamav-fullscan.log
@@ -51,8 +51,8 @@ ram_check 3 "ClamAV"
 cpu_check 2 "ClamAV"
 
 # Install needed tools
-apt update -q4 & spinner_loading
-apt install clamav clamav-freshclam clamav-daemon -y
+apt-get update -q4 & spinner_loading
+apt-get install clamav clamav-freshclam clamav-daemon -y
 
 # stop freshclam and update the database
 check_command systemctl stop clamav-freshclam
@@ -61,9 +61,9 @@ start_if_stopped clamav-freshclam
 
 # Edit ClamAV settings to fit the installation
 sed -i "s|^MaxDirectoryRecursion.*|MaxDirectoryRecursion 30|" /etc/clamav/clamd.conf
-sed -i "s|^MaxFileSize.*|MaxFileSize 100M|" /etc/clamav/clamd.conf
-sed -i "s|^PCREMaxFileSize.*|PCREMaxFileSize 100M|" /etc/clamav/clamd.conf
-sed -i "s|^StreamMaxLength.*|StreamMaxLength 100M|" /etc/clamav/clamd.conf
+sed -i "s|^MaxFileSize.*|MaxFileSize 1000M|" /etc/clamav/clamd.conf
+sed -i "s|^PCREMaxFileSize.*|PCREMaxFileSize 1000M|" /etc/clamav/clamd.conf
+sed -i "s|^StreamMaxLength.*|StreamMaxLength 1000M|" /etc/clamav/clamd.conf
 
 # Start ClamAV
 check_command systemctl restart clamav-freshclam
@@ -99,7 +99,7 @@ install_and_enable_app files_antivirus
 # Configure Nextcloud app
 nextcloud_occ config:app:set files_antivirus av_mode --value="socket"
 nextcloud_occ config:app:set files_antivirus av_socket --value="/var/run/clamav/clamd.ctl"
-nextcloud_occ config:app:set files_antivirus av_stream_max_length --value="104857600"
+nextcloud_occ config:app:set files_antivirus av_stream_max_length --value="1048576000"
 nextcloud_occ config:app:set files_antivirus av_max_file_size --value="-1"
 nextcloud_occ config:app:set files_antivirus av_infected_action --value="only_log"
 
@@ -108,77 +108,24 @@ SCRIPT_PATH="$SCRIPTS/nextcloud-av-notification.sh"
 cat << AV_NOTIFICATION >> "$SCRIPT_PATH"
 #!/bin/bash
 
-# T&M Hansson IT AB © - 2021, https://www.hanssonit.se/
-# Copyright © 2021 Simon Lindner (https://github.com/szaimen)
-# Copyright © Georgiy Sitnikov
-# Inspired by/based on https://github.com/GAS85/nextcloud_scripts/blob/master/nextcloud-av-notification.sh
-
-SCRIPT_NAME="Nextcloud Antivirus Notification"
-SCRIPT_EXPLAINER="This script sends notifications about infected files."
-
-# Variables
-lastMinutes=30
-LOGFILE="/var/log/nextcloud/nextcloud.log"
-tempfile="/tmp/nextcloud_av_notofications-\$(date +"%M-%N").tmp"
-getCurrentTimeZone=\$(date +"%:::z")
-getCurrentTimeZone="\${getCurrentTimeZone:1}"
-timeShiftTo=\$((60 * \$getCurrentTimeZone))
-timeShiftFrom=\$((60 * \$getCurrentTimeZone + \$lastMinutes))
-dateFrom=\$(date --date="-\$timeShiftFrom min" "+%Y-%m-%dT%H:%M:00+00:00")
-dateTo=\$(date --date="-\$timeShiftTo min" "+%Y-%m-%dT%H:%M:00+00:00")
-
-# Check if nextcloud.log exist
-if ! [ -f "\$LOGFILE" ]
+INFECTED_FILES_LOG="\$(timeout 30m tail -n0 -f "$VMLOGS/nextcloud.log" | grep "Infected file" | grep '"level":4,')"
+if [ -z "\$INFECTED_FILES_LOG" ]
 then
     exit
 fi
 
-# Extract logs for a last defined minutes
-awk -v d1="\$dateFrom" -v d2="\$dateTo" -F'["]' '\$10 > d1 && \$10 < d2 || \$10 ~ d2' "\$LOGFILE" \
-| grep "Infected file" | awk -F'["]' '{print \$34}' > "\$tempfile"
+source "$SCRIPTS/fetch_lib.sh"
+INFECTED_FILES_LOG="\$(prettify_json "\$INFECTED_FILES_LOG")"
+INFECTED_FILES="\$(echo "\$INFECTED_FILES_LOG" | grep '"message":' | sed 's|.*"message": "||;s| File: .*||' | sort | uniq)"
 
-# Extract logs for a last defined minutes, from a ROTATED log if present
-if test "\$(find "\$LOGFILE.1" -mmin -"\$lastMinutes")"
+if ! send_mail "Virus was found" "The following action was executed by the antivirus app:
+\$INFECTED_FILES\n
+See the full log below:
+\$INFECTED_FILES_LOG"
 then
-    awk -v d1="\$dateFrom" -v d2="\$dateTo" -F'["]' '\$10 > d1 && \$10 < d2 || \$10 ~ d2' "\$LOGFILE.1" \
-| grep "Infected file" | awk -F'["]' '{print \$34}' >> "\$tempfile"
+    notify_admin_gui "Virus was found" "The following action was executed by the antivirus app:
+\$INFECTED_FILES"
 fi
-
-# Exit if no results found
-if ! [ -s "\$tempfile" ]
-then
-    rm "\$tempfile"
-    exit
-fi
-
-# Load the library if an infected file was found
-# shellcheck source=lib.sh
-source /var/scripts/fetch_lib.sh || source <(curl -sL https://raw.githubusercontent.com/nextcloud/vm/master/lib.sh)
-
-# Check if root
-root_check
-
-# Send notification
-WORDS=(found deleted)
-for toFind in "\${WORDS[@]}"
-do
-    if grep -q "\$toFind" "\$tempfile"
-    then
-        # Prepare output
-        grep "\$toFind" "\$tempfile" | awk '{\$1=""; \$2 = ""; \$3 = "";\$4 = ""; \$5 = ""; \$6 = ""; print \$0}' \
-| sed -r -e 's|appdata_.{12}||' | sed 's|   ||g' > "\$tempfile.output"
-
-        # Send notification
-        notify_admin_gui \
-        "Nextcloud Antivirus - Infected File(s) \$toFind!" \
-        "\$(cat "\$tempfile.output" | cut -c -4000)"
-    fi
-done
-
-rm "\$tempfile"
-rm "\$tempfile.output"
-
-exit
 AV_NOTIFICATION
 
 chown root:root "$SCRIPT_PATH"
@@ -256,12 +203,18 @@ source /var/scripts/fetch_lib.sh || source <(curl -sL https://raw.githubusercont
 
 # Variables/arrays
 FULLSCAN_DONE=""
-FIND_OPTS=(-maxdepth 30 -type f -not -path "/proc/*" -not -path "/sys/*" -not -path "/dev/*")
+FIND_OPTS=(-maxdepth 30 -type f -not -path "/proc/*" -not -path "/sys/*" -not -path "/dev/*" -not -path "*/.snapshots/*")
 
 # Exit if clamscan is already running
 if pgrep clamscan &>/dev/null
 then
     exit
+fi
+
+# Send mail that backup was started
+if ! send_mail "Weekly ClamAV scan started." "You will be notified again when the scan is finished!"
+then
+    notify_admin_gui "Weekly ClamAV scan started." "You will be notified again when the scan is finished!"
 fi
 
 # Only scan for changed files in the last week if initial full-scan is done
@@ -289,11 +242,16 @@ then
     sed -i "s|^FULLSCAN_DONE.*|FULLSCAN_DONE=1|"  "$SCRIPTS"/clamav-fullscan.sh
 fi
 
+INFECTED_FILES_LOG="\$(sed -n '/----------- SCAN SUMMARY -----------/,\$p' $VMLOGS/clamav-fullscan.log)"
+INFECTED_FILES="\$(grep 'FOUND$' $VMLOGS/clamav-fullscan.log)"
+
 # Send notification
-notify_admin_gui \
-"Your weekly full-scan ClamAV report" \
-"\$(sed -n '/----------- SCAN SUMMARY -----------/,\$p' $VMLOGS/clamav-fullscan.log)\n
-\$(grep -i infected $VMLOGS/clamav-fullscan.log | grep -v "Infected files:")"
+if ! send_mail "Your weekly full-scan ClamAV report" "\$INFECTED_FILES_LOG\n
+\$INFECTED_FILES"
+then
+    notify_admin_gui "Your weekly full-scan ClamAV report" "\$INFECTED_FILES_LOG\n
+\$INFECTED_FILES"
+fi
 CLAMAV_REPORT
 
 # Make the script executable

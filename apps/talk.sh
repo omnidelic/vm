@@ -57,10 +57,10 @@ else
     do
         if is_this_installed "$app"
         then
-            apt purge "$app" -y
+            apt-get purge "$app" -y
         fi
     done
-    apt autoremove -y
+    apt-get autoremove -y
     # Show successful uninstall if applicable
     removal_popup "$SCRIPT_NAME"
 fi
@@ -90,24 +90,20 @@ You will now be given the option to change this port to something of your own.
 Please keep in mind NOT to use the following ports as they are likely in use already: 
 ${NONO_PORTS[*]}"
 
-if yesno_box_no "Do you want to change port?"
-then
-    # Ask for port
-    TURN_PORT=$(input_box_flow "Please enter the port you will use for Nextcloud Talk")
-fi
+while :
+do
+    if yesno_box_no "Do you want to change port?"
+    then
+        # Ask for port
+        TURN_PORT=$(input_box_flow "Please enter the port you will use for Nextcloud Talk")
+    fi
 
-containsElement () {
-  local e match="$1"
-  shift
-  for e; do [[ "$e" == "$match" ]] && return 0; done
-  return 1
-}
-
-if containsElement "$TURN_PORT" "${NONO_PORTS[@]}"
-then
-    msg_box "You have to choose another port. Please start over."
-    exit 1
-fi
+    # Check if port is taken and exit if that's the case
+    if check_nono_ports "$TURN_PORT"
+    then
+        break
+    fi
+done
 
 # Install TURN
 check_command install_if_not coturn
@@ -250,7 +246,7 @@ echo "listen: 127.0.0.1:4222" > /etc/nats/nats.conf
 ## Installation
 curl -sL -o "/etc/apt/trusted.gpg.d/morph027-nats-server.asc" "https://packaging.gitlab.io/nats-server/gpg.key"
 echo "deb https://packaging.gitlab.io/nats-server nats main" > /etc/apt/sources.list.d/morph027-nats-server.list
-apt update -q4 & spinner_loading
+apt-get update -q4 & spinner_loading
 install_if_not nats-server
 chown nats:nats /etc/nats/nats.conf
 start_if_stopped nats-server
@@ -263,7 +259,7 @@ check_command systemctl enable nats-server
 source /etc/lsb-release
 curl -sL -o "/etc/apt/trusted.gpg.d/morph027-janus.asc" "https://packaging.gitlab.io/janus/gpg.key"
 echo "deb https://packaging.gitlab.io/janus/$DISTRIB_CODENAME $DISTRIB_CODENAME main" > /etc/apt/sources.list.d/morph027-janus.list
-apt update -q4 & spinner_loading
+apt-get update -q4 & spinner_loading
 install_if_not janus
 ## Configuration
 sed -i "s|#turn_rest_api_key\s*=.*|$JANUS_API_KEY|" /etc/janus/janus.jcfg
@@ -277,7 +273,7 @@ check_command systemctl enable janus
 ## Installation
 curl -sL -o "/etc/apt/trusted.gpg.d/morph027-nextcloud-spreed-signaling.asc" "https://packaging.gitlab.io/nextcloud-spreed-signaling/gpg.key"
 echo "deb https://packaging.gitlab.io/nextcloud-spreed-signaling signaling main" > /etc/apt/sources.list.d/morph027-nextcloud-spreed-signaling.list
-apt update -q4 & spinner_loading
+apt-get update -q4 & spinner_loading
 install_if_not nextcloud-spreed-signaling
 ## Configuration
 if [ ! -f "$SIGNALING_SERVER_CONF" ];
@@ -369,8 +365,8 @@ then
 
     # Logs
     LogLevel warn
-    CustomLog ${APACHE_LOG_DIR}/access.log combined
-    ErrorLog ${APACHE_LOG_DIR}/error.log
+    CustomLog \${APACHE_LOG_DIR}/access.log combined
+    ErrorLog \${APACHE_LOG_DIR}/error.log
 
     # Just in case - see below
     SSLProxyEngine On

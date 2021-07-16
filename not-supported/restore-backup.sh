@@ -202,7 +202,7 @@ do
     do
         STATS=$(echo "$PARTITION_STATS" | grep "^$partition ")
         FSTYPE=$(echo "$STATS" | awk '{print $2}')
-        if [ "$FSTYPE" != "ntfs" ]
+        if [ "$FSTYPE" != "ntfs" ] && [ "$FSTYPE" != "btrfs" ]
         then
             continue
         fi
@@ -232,7 +232,7 @@ done
 if [ -z "$UUIDS" ] 
 then
     msg_box "No drive found that can get mounted.
-Most likely none is NTFS formatted."
+Most likely none is NTFS or BTRFS formatted."
     exit 1
 fi
 
@@ -369,9 +369,9 @@ BORG_ARCHIVE="$choice-NcVM-system-partition"
 print_text_in_color "$ICyan" "Using the borg archive $BORG_ARCHIVE..."
 
 # Test borg archive
-msg_box "We will now check if extracting of the backup works.
-This can take much time, though."
-if yesno_box_yes "Do you want to do this?"
+msg_box "We've implemented the option to test the extraction of the backup before we start the restore process.
+This can take a lot of time though and is because of that not the default."
+if yesno_box_no "Do you want to test the extraction of the backup nonetheless?"
 then
     mkdir -p /tmp/borgextract
     cd /tmp/borgextract
@@ -487,7 +487,7 @@ done
 
 # Restore files
 # Rsync include/exclude patterns: https://stackoverflow.com/a/48010623
-if ! rsync --archive --human-readable --one-file-system --progress \
+if ! rsync --archive --human-readable --one-file-system -vv --stats \
 "${EXCLUDE_DIRS[@]}" "${INCLUDE_DIRS[@]}" "${INCLUDE_FILES[@]}" --exclude='*' "$SYSTEM_DIR/" /
 then
     msg_box "An issue was reported while restoring all needed files."
@@ -514,6 +514,12 @@ fi
 if grep -q " ntfs-3g " "$SYSTEM_DIR/etc/fstab"
 then
     grep " ntfs-3g " "$SYSTEM_DIR/etc/fstab" >> /etc/fstab
+fi
+
+# BTRFS
+if grep -q " btrfs " "$SYSTEM_DIR/etc/fstab"
+then
+    grep " btrfs " "$SYSTEM_DIR/etc/fstab" >> /etc/fstab
 fi
 
 # Dislocker
@@ -544,8 +550,8 @@ if [ -f "$SYSTEM_DIR/$SCRIPTS/veracrypt-automount.sh" ]
 then
     print_text_in_color "$ICyan" "Installing veracrypt... This can take a long time!"
     add-apt-repository ppa:unit193/encryption -y
-    apt update -q4 & spinner_loading
-    apt install veracrypt --no-install-recommends -y
+    apt-get update -q4 & spinner_loading
+    apt-get install veracrypt --no-install-recommends -y
     # No need to copy the file since it is already synced via rsync
     # Create startup service
     cat << SERVICE > /etc/systemd/system/veracrypt-automount.service
@@ -576,7 +582,7 @@ then
         adduser --no-create-home --quiet --disabled-login --force-badname --gecos "" "$user" &>/dev/null
         usermod --append --groups smb-users,www-data "$user"
     done
-    DEBIAN_FRONTEND=noninteractive apt install samba -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"
+    DEBIAN_FRONTEND=noninteractive apt-get install samba -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"
     # No need to sync files since they are already synced via rsync
 fi
 
@@ -641,22 +647,8 @@ nextcloud_occ_no_check maintenance:data-fingerprint
 # repairing the Database, if it got corupted
 nextcloud_occ_no_check maintenance:repair 
 
-# Appending the new local IP-address to trusted Domains
-print_text_in_color "$ICyan" "Appending the new Ip-Address to trusted Domains..."
-count=0
-while [ "$count" -le 10 ]
-do
-    if [ "$(nextcloud_occ_no_check config:system:get trusted_domains "$count")" = "$ADDRESS" ]
-    then
-        break
-    elif [ -z "$(nextcloud_occ_no_check config:system:get trusted_domains "$count")" ]
-    then
-        nextcloud_occ_no_check config:system:set trusted_domains "$count" --value="$ADDRESS"
-        break
-    else
-        count=$((count+1))
-    fi
-done
+# Appending the new ip to trusted domains
+add_to_trusted_domains "$ADDRESS"
 
 # Cleanup trashbin and files_versions because we removed them
 nextcloud_occ_no_check trashbin:cleanup --all-users -vvv

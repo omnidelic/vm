@@ -20,17 +20,7 @@ a2dissite "$HTTP_CONF"
 a2dissite 000-default.conf
 if restart_webserver
 then
-    msg_box "New settings works! TLS is now activated and OK!
-
-This cert will expire in 90 days if you don't renew it.
-There are several ways of renewing this cert and here are some tips and tricks:
-https://goo.gl/c1JHR0
-
-To do your job a little bit easier we have added a auto renew script as a cronjob.
-If you need to edit the crontab please type: crontab -u root -e
-If you need to edit the script itself, please check: $SCRIPTS/letsencryptrenew.sh
-
-Feel free to contribute to this project: https://goo.gl/3fQD65"
+    msg_box "New settings works! TLS is now activated and OK!"
 
 FQDOMAIN=$(grep -m 1 "ServerName" "/etc/apache2/sites-enabled/$1" | awk '{print $2}')
 if [ "$(hostname)" != "$FQDOMAIN" ]
@@ -52,12 +42,11 @@ cat << CRONTAB > "$SCRIPTS/letsencryptrenew.sh"
 #!/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
 echo '###################################'
-DATE=\$(date +%Y-%m-%d_%H:%M)
 if ! certbot renew >> /var/log/letsencrypt/cronjob.log 2>&1
 then
-    echo "Let's Encrypt FAILED!--\$DATE" >> /var/log/letsencrypt/cronjob.log
+    echo "Let's Encrypt FAILED!--$(date +%Y-%m-%d_%H:%M)" >> /var/log/letsencrypt/cronjob.log
 else
-    echo "Let's Encrypt SUCCESS!--\$DATE" >> /var/log/letsencrypt/cronjob.log
+    echo "Let's Encrypt SUCCESS!--$(date +%Y-%m-%d_%H:%M)" >> /var/log/letsencrypt/cronjob.log
 fi
 # Check if service is running
 if ! pgrep apache2 > /dev/null
@@ -75,7 +64,7 @@ CRONTAB
 chmod +x $SCRIPTS/letsencryptrenew.sh
 # Add cronjob
 crontab -u root -l | grep -v "$SCRIPTS/letsencryptrenew.sh" | crontab -u root -
-crontab -u root -l | { cat; echo "3 */12 * * * $SCRIPTS/letsencryptrenew.sh"; } | crontab -u root -
+crontab -u root -l | { cat; echo "3 */12 * * * $SCRIPTS/letsencryptrenew.sh >/dev/null"; } | crontab -u root -
 
 # Cleanup
 rm -f $SCRIPTS/test-new-config.sh

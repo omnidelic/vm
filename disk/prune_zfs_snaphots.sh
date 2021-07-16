@@ -26,7 +26,7 @@ then
             notify_admin_gui \
             "Disk space almost full!" \
             "The disk space for ncdata is almost full. We have automatically deleted \
-ZFS snapshots older than 4 weeks and cleaned up your trashbin to free up some space \
+ZFS snapshots older than 2 days and cleaned up your trashbin to free up some space \
 and avoid a fatal crash. Please check $VMLOGS/zfs_prune.log for the results."
             # On screen information
             msg_box "Your disk space is almost full (more than 70%).
@@ -53,7 +53,7 @@ The script will also delete everything in trashbin for all users to free up some
                 mkdir -p "$VMLOGS"
             fi
             touch $VMLOGS/zfs_prune.log
-            ./zfs-prune-snapshots.sh 4w ncdata >> $VMLOGS/zfs_prune.log
+            ./zfs-prune-snapshots.sh 2d ncdata >> $VMLOGS/zfs_prune.log
             nextcloud_occ trashbin:cleanup --all-users >> $VMLOGS/zfs_prune.log
         fi
     fi

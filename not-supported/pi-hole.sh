@@ -118,17 +118,17 @@ Please report this to $ISSUES"
     # Remove all initially installed applications
     for program in "${INSTALLED[@]}"
     do
-        apt purge "$program" -y
+        apt-get purge "$program" -y
     done
 
     # Remove unbound
     if is_this_installed unbound
     then
-        apt purge unbound -y
+        apt-get purge unbound -y
     fi
 
     # Remove not needed dependencies
-    apt autoremove -y
+    apt-get autoremove -y
 
     # Delete other files
     rm -f /var/www/html/index.lighttpd.orig
@@ -317,8 +317,8 @@ Listen 8094
 		
     # Logs
     LogLevel warn
-    CustomLog ${APACHE_LOG_DIR}/access.log combined
-    ErrorLog ${APACHE_LOG_DIR}/error.log
+    CustomLog \${APACHE_LOG_DIR}/access.log combined
+    ErrorLog \${APACHE_LOG_DIR}/error.log
 		
     # Just in case - see below
     SSLProxyEngine On

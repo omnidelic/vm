@@ -37,8 +37,16 @@ inform_user() {
 start_services() {
     inform_user "$ICyan" "Starting services..."
     systemctl start postgresql
-    nextcloud_occ_no_check maintenance:mode --off
+    if [ -z "$MAINTENANCE_MODE_ON" ]
+    then
+        nextcloud_occ_no_check maintenance:mode --off
+    fi
     start_if_stopped docker
+    # Restart notify push if existing
+    if [ -f "$NOTIFY_PUSH_SERVICE_PATH" ]
+    then
+        systemctl restart notify_push
+    fi
 }
 paste_log_file() {
     cat "$LOG_FILE" >> "$BORGBACKUP_LOG"
@@ -214,6 +222,19 @@ then
     fi
 fi
 
+# Test if btrfs volume
+if grep " $BACKUP_MOUNTPOINT " /etc/mtab | grep -q btrfs
+then
+    IS_BTRFS_PART=1
+    mkdir -p "$BACKUP_MOUNTPOINT/.snapshots"
+    btrfs subvolume snapshot -r "$BACKUP_MOUNTPOINT" "$BACKUP_MOUNTPOINT/.snapshots/@$CURRENT_DATE"
+    while [ "$(find "$BACKUP_MOUNTPOINT/.snapshots/" -maxdepth 1 -mindepth 1 -type d -name '@*_*' | wc -l)" -gt 14 ]
+    do
+        DELETE_SNAP="$(find "$BACKUP_MOUNTPOINT/.snapshots/" -maxdepth 1 -mindepth 1 -type d -name '@*_*' | sort | head -1)"
+        btrfs subvolume delete "$DELETE_SNAP"
+    done
+fi
+
 # Send mail that backup was started
 if ! send_mail "Daily backup started!" "You will be notified again when the backup is finished!
 Please don't restart or shutdown your server until then!"
@@ -234,6 +255,10 @@ inform_user "$ICyan" "Stopping services..."
 if is_docker_running
 then
     systemctl stop docker
+fi
+if [ "$(nextcloud_occ_no_check config:system:get maintenance)" = "true" ]
+then
+    MAINTENANCE_MODE_ON=1
 fi
 nextcloud_occ_no_check maintenance:mode --on
 # Database export
@@ -365,7 +390,8 @@ fi
 BORG_OPTS=(--stats --compression "auto,zstd" --exclude-caches --checkpoint-interval 86400)
 
 # System backup
-EXCLUDED_DIRECTORIES=(home/*/.cache root/.cache home/plex/transcode var/cache lost+found run var/run dev tmp)
+EXCLUDED_DIRECTORIES=(home/*/.cache root/.cache home/plex/transcode var/cache lost+found \
+run var/run dev tmp "home/plex/config/Library/Application Support/Plex Media Server/Cache")
 # mnt, media, sys, prob don't need to be excluded because of the usage of lvm-snapshots and the --one-file-system flag
 for directory in "${EXCLUDED_DIRECTORIES[@]}"
 do
@@ -489,7 +515,7 @@ do
 
     # Create backup
     inform_user "$ICyan" "Creating $DIRECTORY_NAME backup..."
-    if ! borg create "${BORG_OPTS[@]}" --one-file-system \
+    if ! borg create "${BORG_OPTS[@]}" --one-file-system --exclude "$DIRECTORY/.snapshots/" \
 "$BACKUP_TARGET_DIRECTORY::$CURRENT_DATE-NcVM-$DIRECTORY_NAME-directory" "$DIRECTORY/"
     then
         inform_user "$ICyan" "Deleting the failed $DIRECTORY_NAME backup archive..."
@@ -516,6 +542,14 @@ fi
 
 # Print usage of drives into log
 show_drive_usage
+
+# Adjust permissions and scrub volume
+if [ -n "$IS_BTRFS_PART" ]
+then
+    inform_user "$ICyan" "Adjusting permissions..."
+    find "$BACKUP_MOUNTPOINT/" -not -path "$BACKUP_MOUNTPOINT/.snapshots/*" \
+\( ! -perm 600 -o ! -group root -o ! -user root \) -exec chmod 600 {} \; -exec chown root:root {} \; 
+fi
 
 # Unmount the backup drive
 inform_user "$ICyan" "Unmounting the backup drive..."
@@ -545,6 +579,12 @@ fi
 
 # Exit here if the backup doesn't shall get checked
 if [ -z "$CHECK_BACKUP" ]
+then
+    exit
+fi
+
+# Exit here if we want to skip the backup check
+if [ -n "$SKIP_DAILY_BACKUP_CHECK" ]
 then
     exit
 fi
@@ -607,6 +647,17 @@ then
     send_error_mail "Some errors were reported during the backup integrity check!" "Backup integrity check"
 fi
 
+# Adjust permissions and scrub volume
+if [ -n "$IS_BTRFS_PART" ] && [ "$BTRFS_SCRUB_BACKUP_DRIVE" = "yes" ]
+then
+    inform_user "$ICyan" "Scrubbing BTRFS partition..."
+    if ! btrfs scrub start -B "$BACKUP_MOUNTPOINT"
+    then
+        re_rename_snapshot
+        send_error_mail "Some errors were reported while scrubbing the BTRFS partition."
+    fi
+fi
+
 # Rename the snapshot back to normal
 if ! re_rename_snapshot
 then
@@ -618,7 +669,7 @@ show_drive_usage
 
 # Unmount the backup drive
 inform_user "$ICyan" "Unmounting the backup drive..."
-if ! umount "$BACKUP_MOUNTPOINT"
+if mountpoint -q "$BACKUP_MOUNTPOINT" && ! umount "$BACKUP_MOUNTPOINT"
 then
     send_error_mail "Could not unmount the backup drive!" "Backup integrity check"
 fi

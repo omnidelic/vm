@@ -54,7 +54,7 @@ else
     then
         bash /usr/libexec/netdata/netdata-uninstaller.sh --force --yes
     else
-        check_command curl_to_dir https://raw.githubusercontent.com/netdata/netdata/master/packaging/installer netdata-uninstaller.sh $SCRIPTS
+        curl_to_dir https://raw.githubusercontent.com/netdata/netdata/master/packaging/installer netdata-uninstaller.sh $SCRIPTS
         check_command bash $SCRIPTS/netdata-uninstaller.sh --force --yes
         rm $SCRIPTS/netdata-uninstaller.sh
         rm -rf /var/lib/netdata
@@ -67,7 +67,7 @@ fi
 # Install
 is_process_running dpkg
 is_process_running apt
-apt update -q4 & spinner_loading
+apt-get update -q4 & spinner_loading
 curl_to_dir https://my-netdata.io kickstart.sh $SCRIPTS
 sudo -u "$UNIXUSER" bash $SCRIPTS/kickstart.sh all --dont-wait --no-updates --stable-channel
 rm -f $SCRIPTS/kickstart.sh

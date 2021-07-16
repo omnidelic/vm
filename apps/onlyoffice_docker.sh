@@ -17,13 +17,6 @@ debug_mode
 # Check if root
 root_check
 
-# Remove OnlyOffice-documentserver if activated
-if is_app_enabled documentserver_community
-then
-    any_key "The integrated OnlyOffice Documentserver will get uninstalled. Press any key to continue. Press CTRL+C to abort"
-    nextcloud_occ app:remove documentserver_community
-fi
-
 # Check if collabora is already installed
 if ! does_this_docker_exist 'onlyoffice/documentserver'
 then
@@ -33,43 +26,7 @@ else
     # Ask for removal or reinstallation
     reinstall_remove_menu "$SCRIPT_NAME"
     # Removal
-    # Check if Collabora is previously installed
-    # If yes, then stop and prune the docker container
-    docker_prune_this 'onlyoffice/documentserver'
-    # Revoke LE
-    SUBDOMAIN=$(input_box_flow "Please enter the subdomain you are using for OnlyOffice, e.g: office.yourdomain.com")
-    if [ -f "$CERTFILES/$SUBDOMAIN/cert.pem" ]
-    then
-        yes no | certbot revoke --cert-path "$CERTFILES/$SUBDOMAIN/cert.pem"
-        REMOVE_OLD="$(find "$LETSENCRYPTPATH/" -name "$SUBDOMAIN*")"
-        for remove in $REMOVE_OLD
-            do rm -rf "$remove"
-        done
-    fi
-    # Remove Apache2 config
-    if [ -f "$SITES_AVAILABLE/$SUBDOMAIN.conf" ]
-    then
-        a2dissite "$SUBDOMAIN".conf
-        restart_webserver
-        rm -f "$SITES_AVAILABLE/$SUBDOMAIN.conf"
-    fi
-    # Disable RichDocuments (Collabora App) if activated
-    if is_app_installed onlyoffice
-    then
-        nextcloud_occ app:remove onlyoffice
-    fi
-    # Remove trusted domain
-    count=0
-    while [ "$count" -lt 10 ]
-    do
-        if [ "$(nextcloud_occ_no_check config:system:get trusted_domains "$count")" == "$SUBDOMAIN" ]
-        then
-            nextcloud_occ_no_check config:system:delete trusted_domains "$count"
-            break
-        else
-            count=$((count+1))
-        fi
-    done
+    remove_onlyoffice_docker
     # Show successful uninstall if applicable
     removal_popup "$SCRIPT_NAME"
 fi
@@ -77,44 +34,12 @@ fi
 # Check if collabora is installed and remove every trace of it
 if does_this_docker_exist 'collabora/code'
 then
-    msg_box "You can't run both Collabora and OnlyOffice on the same VM. We will now remove Collabora from the server."
-    # Remove docker image
-    docker_prune_this 'collabora/code'
-    # Revoke LE
-    SUBDOMAIN=$(input_box_flow "Please enter the subdomain you are using for Collabora, e.g: office.yourdomain.com")
-    if [ -f "$CERTFILES/$SUBDOMAIN/cert.pem" ]
-    then
-        yes no | certbot revoke --cert-path "$CERTFILES/$SUBDOMAIN/cert.pem"
-        REMOVE_OLD="$(find "$LETSENCRYPTPATH/" -name "$SUBDOMAIN*")"
-        for remove in $REMOVE_OLD
-            do rm -rf "$remove"
-        done
-    fi
-    # Remove Apache2 config
-    if [ -f "$SITES_AVAILABLE/$SUBDOMAIN.conf" ]
-    then
-        a2dissite "$SUBDOMAIN".conf
-        restart_webserver
-        rm -f "$SITES_AVAILABLE/$SUBDOMAIN.conf"
-    fi
-    # Disable Collabora App if activated
-    if is_app_installed richdocuments
-    then
-       nextcloud_occ app:remove richdocuments
-    fi
-    # Remove trusted domain
-    count=0
-    while [ "$count" -lt 10 ]
-    do
-        if [ "$(nextcloud_occ_no_check config:system:get trusted_domains "$count")" == "$SUBDOMAIN" ]
-        then
-            nextcloud_occ_no_check config:system:delete trusted_domains "$count"
-            break
-        else
-            count=$((count+1))
-        fi
-    done
+    # Removal
+    remove_collabora_docker
 fi
+
+# Remove all office apps
+remove_all_office_apps
 
 # Check if apache2 evasive-mod is enabled and disable it because of compatibility issues
 if [ "$(apache2ctl -M | grep evasive)" != "" ]
@@ -170,7 +95,7 @@ then
 fi
 
 # Get the latest packages
-apt update -q4 & spinner_loading
+apt-get update -q4 & spinner_loading
 
 # Check if Nextcloud is installed
 print_text_in_color "$ICyan" "Checking if Nextcloud is installed..."
@@ -208,11 +133,6 @@ install_docker
 # Install Onlyoffice docker
 docker pull onlyoffice/documentserver:latest
 docker run -i -t -d -p 127.0.0.3:9090:80 --restart always --name onlyoffice onlyoffice/documentserver
-
-# Licensed version
-# https://helpcenter.onlyoffice.com/server/integration-edition/docker/docker-installation.aspx
-# docker run -i -t -d -p 127.0.0.3:9090:80 --restart=always --name onlyoffice \
-# -v /app/onlyoffice/DocumentServer/data:/var/www/onlyoffice/Data  onlyoffice/documentserver-ie
 
 # Install apache2
 install_if_not apache2
@@ -259,8 +179,8 @@ then
 
     # Logs
     LogLevel warn
-    CustomLog ${APACHE_LOG_DIR}/access.log combined
-    ErrorLog ${APACHE_LOG_DIR}/error.log
+    CustomLog \${APACHE_LOG_DIR}/access.log combined
+    ErrorLog \${APACHE_LOG_DIR}/error.log
 
     # Just in case - see below
     SSLProxyEngine On
@@ -327,14 +247,15 @@ if [ -d "$NC_APPS_PATH"/onlyoffice ]
 then
     nextcloud_occ config:app:set onlyoffice DocumentServerUrl --value=https://"$SUBDOMAIN/"
     chown -R www-data:www-data "$NC_APPS_PATH"
-    nextcloud_occ config:system:set trusted_domains 3 --value="$SUBDOMAIN"
+    # Appending the new domain to trusted domains
+    add_to_trusted_domains "$SUBDOMAIN"
     # Add prune command
     add_dockerprune
     # Restart Docker
-    print_text_in_color "$ICyan" "Restaring Docker..."
-    systemctl restart docker.service
+    print_text_in_color "$ICyan" "Restarting Docker..."
     docker restart onlyoffice
-    msg_box "OnlyOffice Docker is now successfully installed."
+    msg_box "OnlyOffice Docker is now successfully installed. 
+Please be aware that the container is currently starting which can take a few minutes."
 fi
 
 exit

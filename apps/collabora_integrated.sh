@@ -20,54 +20,6 @@ debug_mode
 # Check if root
 root_check
 
-# Check if Collabora is installed using the old method
-if does_this_docker_exist 'collabora/code'
-then
-    msg_box "Your server is compatible with the new way of installing Collabora. \
-We will now remove the old docker and install the app from Nextcloud instead."
-    # Remove docker image
-    docker_prune_this 'collabora/code'
-    # Disable RichDocuments (Collabora App) if activated
-    if is_app_installed richdocuments
-    then
-        nextcloud_occ app:remove richdocuments
-    fi
-    # Disable OnlyOffice (Collabora App) if activated
-    if is_app_installed onlyoffice
-    then
-        nextcloud_occ app:remove onlyoffice
-    fi
-    # Revoke LE
-    SUBDOMAIN=$(input_box_flow "Please enter the subdomain you are using for Collabora, e.g: office.yourdomain.com")
-    if [ -f "$CERTFILES/$SUBDOMAIN/cert.pem" ]
-    then
-        yes no | certbot revoke --cert-path "$CERTFILES/$SUBDOMAIN/cert.pem"
-        REMOVE_OLD="$(find "$LETSENCRYPTPATH/" -name "$SUBDOMAIN*")"
-        for remove in $REMOVE_OLD
-            do rm -rf "$remove"
-        done
-    fi
-    # Remove Apache2 config
-    if [ -f "$SITES_AVAILABLE/$SUBDOMAIN.conf" ]
-    then
-        a2dissite "$SUBDOMAIN".conf
-        restart_webserver
-        rm -f "$SITES_AVAILABLE/$SUBDOMAIN.conf"
-    fi
-    # Remove trusted domain
-    count=0
-    while [ "$count" -lt 10 ]
-    do
-        if [ "$(nextcloud_occ_no_check config:system:get trusted_domains "$count")" == "$SUBDOMAIN" ]
-        then
-            nextcloud_occ_no_check config:system:delete trusted_domains "$count"
-            break
-        else
-            count=$((count+1))
-        fi
-    done
-fi
-
 # Check if Collabora is installed using the new method
 if ! is_app_installed richdocumentscode
 then
@@ -87,70 +39,31 @@ else
     removal_popup "$SCRIPT_NAME"
 fi
 
-# Check if Nextcloud is installed with TLS
-check_nextcloud_https "Collabora (Integrated)"
+# Check if Collabora is installed using the old method
+if does_this_docker_exist 'collabora/code'
+then
+    # Removal
+    remove_collabora_docker
+fi
 
 # Check if Onlyoffice is installed and remove every trace of it
 if does_this_docker_exist 'onlyoffice/documentserver'
 then
-    msg_box "You can't run both Collabora and OnlyOffice on the same VM. We will now remove Onlyoffice from the server."
-    # Remove docker image
-    docker_prune_this 'onlyoffice/documentserver'
-    # Revoke LE
-    SUBDOMAIN=$(input_box_flow "Please enter the subdomain you are using for Onlyoffice, e.g: office.yourdomain.com")
-    if [ -f "$CERTFILES/$SUBDOMAIN/cert.pem" ]
-    then
-        yes no | certbot revoke --cert-path "$CERTFILES/$SUBDOMAIN/cert.pem"
-        REMOVE_OLD="$(find "$LETSENCRYPTPATH/" -name "$SUBDOMAIN*")"
-        for remove in $REMOVE_OLD
-            do rm -rf "$remove"
-        done
-    fi
-    # Remove Apache2 config
-    if [ -f "$SITES_AVAILABLE/$SUBDOMAIN.conf" ]
-    then
-        a2dissite "$SUBDOMAIN".conf
-        restart_webserver
-        rm -f "$SITES_AVAILABLE/$SUBDOMAIN.conf"
-    fi
-    # Remove trusted domain
-    count=0
-    while [ "$count" -lt 10 ]
-    do
-        if [ "$(nextcloud_occ_no_check config:system:get trusted_domains "$count")" == "$SUBDOMAIN" ]
-        then
-            nextcloud_occ_no_check config:system:delete trusted_domains "$count"
-            break
-        else
-            count=$((count+1))
-        fi
-    done
-else
-    # Remove OnlyOffice app
-    if is_app_installed onlyoffice
-    then
-        nextcloud_occ app:remove onlyoffice
-    fi
+    # Removal
+    remove_onlyoffice_docker
 fi
 
-# remove OnlyOffice-documentserver if activated
-if is_app_enabled documentserver_community
-then
-    any_key "OnlyOffice will get uninstalled. Press any key to continue. Press CTRL+C to abort"
-    nextcloud_occ app:remove documentserver_community
-fi
-
-# Disable OnlyOffice App if activated
-if is_app_installed onlyoffice
-then
-    nextcloud_occ app:remove onlyoffice
-fi
+# Remove all office apps
+remove_all_office_apps
 
 # Nextcloud 19 is required.
 lowest_compatible_nc 19
 
 ram_check 2 Collabora
 cpu_check 2 Collabora
+
+# Check if Nextcloud is installed with TLS
+check_nextcloud_https "Collabora (Integrated)"
 
 # Install Collabora
 msg_box "We will now install Collabora.
@@ -172,6 +85,8 @@ if ! is_app_installed richdocuments
 then
     msg_box "The Collabora app failed to install. Please try again later."
 fi
+
+nextcloud_occ config:app:set richdocuments public_wopi_url --value="$(nextcloud_occ_no_check config:system:get overwrite.cli.url)"
 
 # Just make sure the script exits
 exit

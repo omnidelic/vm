@@ -55,6 +55,19 @@ If you are sure that no update or backup is currently running, you can fix this 
     exit 1
 fi
 
+# Change from APCu to Redis for local cache
+# https://github.com/nextcloud/vm/pull/2040
+if pecl list | grep apcu >/dev/null 2>&1
+then
+    sed -i "/memcache.local/d" "$NCPATH"/config/config.php
+    if pecl list | grep redis >/dev/null 2>&1
+    then
+        nextcloud_occ config:system:set memcache.local --value='\OC\Memcache\Redis'
+    else
+       nextcloud_occ config:system:delete memcache.local
+    fi
+fi
+
 # Create a snapshot before doing anything else
 check_free_space
 if ! [ -f "$SCRIPTS/nextcloud-startup-script.sh" ] && (does_snapshot_exist "NcVM-startup" \
@@ -108,7 +121,7 @@ It should then start working again."
     start_if_stopped docker
 fi
 
-# Check if /boot is filled more than 90% and exit the script if that's 
+# Check if /boot is filled more than 90% and exit the script if that's
 # the case since we don't want to end up with a broken system
 if [ -d /boot ]
 then
@@ -128,12 +141,24 @@ rm -f /root/php-upgrade.sh
 rm -f /tmp/php-upgrade.sh
 rm -f /root/db-migration.sh
 
+# Fix fancy progress bar for apt-get
+# https://askubuntu.com/a/754653
+if [ -d /etc/apt/apt.conf.d ]
+then
+    if ! [ -f /etc/apt/apt.conf.d/99progressbar ]
+    then
+        echo 'Dpkg::Progress-Fancy "1";' > /etc/apt/apt.conf.d/99progressbar
+        echo 'APT::Color "1";' >> /etc/apt/apt.conf.d/99progressbar
+        chmod 644 /etc/apt/apt.conf.d/99progressbar
+    fi
+fi
+
 # Ubuntu 16.04 is deprecated
 check_distro_version
 
 # Hold PHP if Ondrejs PPA is used
 print_text_in_color "$ICyan" "Fetching latest packages with apt..."
-apt update -q4 & spinner_loading
+apt-get update -q4 & spinner_loading
 if apt-cache policy | grep "ondrej" >/dev/null 2>&1
 then
     print_text_in_color "$ICyan" "Ondrejs PPA is installed. \
@@ -237,17 +262,22 @@ then
     fi
 fi
 
-export DEBIAN_FRONTEND=noninteractive ; apt dist-upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"
+export DEBIAN_FRONTEND=noninteractive ; apt-get dist-upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"
 
 # Update Netdata
 if [ -d /etc/netdata ]
 then
     print_text_in_color "$ICyan" "Updating Netdata..."
+    install_if_not cmake # Needed for Netdata in newer versions
+    install_if_not libuv1-dev # Needed for Netdata in newer versions
     NETDATA_UPDATER_PATH="$(find /usr -name 'netdata-updater.sh')"
     if [ -n "$NETDATA_UPDATER_PATH" ]
     then
-        install_if_not cmake # Needed for Netdata in newer versions
         bash "$NETDATA_UPDATER_PATH"
+    else
+        curl_to_dir https://raw.githubusercontent.com/netdata/netdata/master/packaging/installer/ netdata-updater.sh "$SCRIPTS"
+        bash "$SCRIPTS"/netdata-updater.sh
+        rm -f "$SCRIPTS"/netdata-updater.sh
     fi
 fi
 
@@ -259,8 +289,8 @@ then
     if ! snap list certbot >/dev/null 2>&1
     then
         print_text_in_color "$ICyan" "Reinstalling certbot (Let's Encrypt) as a snap instead..."
-        apt remove certbot -y
-        apt autoremove -y
+        apt-get remove certbot -y
+        apt-get autoremove -y
         install_if_not snapd
         snap install core
         snap install certbot --classic
@@ -307,12 +337,33 @@ then
     check_command phpenmod -v ALL redis
 fi
 
-# Upgrade APCu and igbinary
+# Remove APCu https://github.com/nextcloud/vm/issues/2039
+if is_this_installed "php$PHPVER"-dev
+then
+    # Delete PECL APCu
+    if pecl list | grep -q apcu
+    then
+        if ! yes no | pecl uninstall apcu
+        then
+            msg_box "APCu PHP module removal failed! Please report this to $ISSUES"
+        else
+            print_text_in_color "$IGreen" "APCu PHP module removal OK!"
+        fi
+    # Delete everything else
+    check_command phpdismod -v ALL apcu
+    rm -f $PHP_MODS_DIR/apcu.ini
+    sed -i "/extension=apcu.so/d" "$PHP_INI"
+    sed -i "/APCu/d" "$PHP_INI"
+    sed -i "/apc./d" "$PHP_INI"
+    fi
+fi
+
+# Upgrade other PECL dependencies
 if [ "${CURRENTVERSION%%.*}" -ge "17" ]
 then
     if [ -f "$PHP_INI" ]
     then
-        print_text_in_color "$ICyan" "Trying to upgrade igbinary, smbclient, and APCu..."
+        print_text_in_color "$ICyan" "Trying to upgrade igbinary, and smbclient..."
         if pecl list | grep igbinary >/dev/null 2>&1
         then
             yes no | pecl upgrade igbinary
@@ -355,35 +406,8 @@ then
                 sed -i "/extension=smbclient.so/d" "$PHP_INI"
             fi
         fi
-        if pecl list | grep -q apcu
-        then
-            yes no | pecl upgrade apcu
-            # Remove old igbinary
-            if grep -qFx extension=apcu.so "$PHP_INI"
-            then
-                sed -i "/extension=apcu.so/d" "$PHP_INI"
-            fi
-            # Check if apcu is enabled and create the file if not
-            if [ ! -f $PHP_MODS_DIR/apcu.ini ]
-            then
-                touch $PHP_MODS_DIR/apcu.ini
-            fi
-            # Enable new apcu
-            if ! grep -qFx extension=apcu.so $PHP_MODS_DIR/apcu.ini
-            then
-                echo "# PECL apcu" > $PHP_MODS_DIR/apcu.ini
-                echo "extension=apcu.so" >> $PHP_MODS_DIR/apcu.ini
-                check_command phpenmod -v ALL apcu
-            fi
-            # Fix https://help.nextcloud.com/t/nc-21-manual-update-issues/108693/4?$
-            if ! grep -qFx apc.enable_cli=1 $PHP_MODS_DIR/apcu.ini
-            then
-                echo "apc.enable_cli=1" >> $PHP_MODS_DIR/apcu.ini
-                check_command phpenmod -v ALL apcu
-            fi
-        fi
         if pecl list | grep -q inotify
-        then 
+        then
             # Remove old inotify
             if grep -qFx extension=inotify.so "$PHP_INI"
             then
@@ -468,8 +492,8 @@ we have removed Watchtower from this server. Updates will now happen for each co
 fi
 
 # Cleanup un-used packages
-apt autoremove -y
-apt autoclean
+apt-get autoremove -y
+apt-get autoclean
 
 # Update GRUB, just in case
 update-grub
@@ -523,10 +547,18 @@ if [ -n "$UPDATED_APPS" ]
 then
     print_text_in_color "$IGreen" "$UPDATED_APPS"
     notify_admin_gui \
-    "You've got app updates!" \
+    "Nextcloud apps just got updated!" \
     "$UPDATED_APPS"
+    # Just make sure everything is updated (sometimes app requires occ upgrade to be run)
+    nextcloud_occ upgrade
 else
     print_text_in_color "$IGreen" "Your apps are already up to date!"
+fi
+
+# Restart notify push if existing
+if [ -f "$NOTIFY_PUSH_SERVICE_PATH" ]
+then
+    systemctl restart notify_push
 fi
 
 # Nextcloud 13 is required.
@@ -703,7 +735,6 @@ check_command systemctl stop apache2.service
 # Create backup dir (/mnt/NCBACKUP/)
 if [ ! -d "$BACKUP" ]
 then
-    BACKUP=/var/NCBACKUP
     mkdir -p $BACKUP
 fi
 
@@ -730,15 +761,22 @@ then
     nextcloud_occ config:system:delete app_install_overwrite
 fi
 
+# Move backups to location according to $VAR
+if [ -d /var/NCBACKUP/ ]
+then
+    mv /var/NCBACKUP "$BACKUP"
+    mv /var/NCBACKUP-OLD "$BACKUP"-OLD/
+fi
+
 # Check if backup exists and move to old
 print_text_in_color "$ICyan" "Backing up data..."
-DATE=$(date +%Y-%m-%d-%H%M%S)
 if [ -d "$BACKUP" ]
 then
-    mkdir -p "$BACKUP"-OLD/"$DATE"
     install_if_not rsync
-    rsync -Aaxz "$BACKUP"/ "$BACKUP"-OLD/"$DATE"
-    rm -R "$BACKUP"
+    mkdir -p "$BACKUP"-OLD/"$(date +%Y-%m-%d-%H%M%S)"
+    rsync -Aaxz "$BACKUP"/* "$BACKUP"-OLD/"$(date +%Y-%m-%d-%H%M%S)"
+    rm -rf "$BACKUP"-OLD/"$(date --date='1 year ago' +%Y)"*
+    rm -rf "$BACKUP"
     mkdir -p "$BACKUP"
 fi
 
@@ -946,6 +984,14 @@ then
     fi
 fi
 
+# Fix crontab every 5 minutes instead of 15
+if crontab -u www-data -l | grep -q "\*/15  \*  \*  \*  \* php -f $NCPATH/cron.php"
+then
+    crontab -u www-data -l | grep -v "php -f $NCPATH/cron.php" | crontab -u www-data -
+    crontab -u www-data -l | { cat; echo "*/5  *  *  *  * php -f $NCPATH/cron.php > /dev/null 2>&1"; } | crontab -u www-data -
+    print_text_in_color "$ICyan" "Nextcloud crontab updated to run every 5 minutes."
+fi
+
 # Change owner of $BACKUP folder to root
 chown -R root:root "$BACKUP"
 
@@ -978,11 +1024,20 @@ To recover your old apps, please check $BACKUP/apps and copy them to $NCPATH/app
 Thank you for using T&M Hansson IT's updater!"
     nextcloud_occ status
     nextcloud_occ maintenance:mode --off
+    # Restart notify push if existing
+    if [ -f "$NOTIFY_PUSH_SERVICE_PATH" ]
+    then
+        systemctl restart notify_push
+    fi
     print_text_in_color "$ICyan" "Sending notification about the successful update to all admins..."
     notify_admin_gui \
     "Nextcloud is now updated!" \
     "Your Nextcloud is updated to $CURRENTVERSION_after with the update script in the Nextcloud VM."
-    echo "NEXTCLOUD UPDATE success-$(date +"%Y%m%d")" >> "$VMLOGS"/update.log
+    mkdir -p "$VMLOGS"/updates
+    rm -f "$VMLOGS"/update.log # old place
+    echo "NEXTCLOUD UPDATE success-$(date +"%Y%m%d")" >> "$VMLOGS"/updates/update.log
+    # Remove logs from last year to save space
+    rm -f "$VMLOGS"/updates/update-"$(date --date='1 year ago' +%Y)"*
     if [ -n "$SNAPSHOT_EXISTS" ]
     then
         check_command lvrename /dev/ubuntu-vg/NcVM-snapshot-pending /dev/ubuntu-vg/NcVM-snapshot

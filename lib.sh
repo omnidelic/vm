@@ -50,6 +50,7 @@ INTERNET_DNS="9.9.9.9"
 # Default Quad9 DNS servers, overwritten by the systemd global DNS defined servers, if set
 DNS1="9.9.9.9"
 DNS2="149.112.112.112"
+NONO_PORTS=(22 25 53 80 443 1024 3012 3306 5178 5179 5432 7867 7983 8983 10000 8081 8443 9443)
 use_global_systemd_dns() {
 if [ -f "/etc/systemd/resolved.conf" ]
 then
@@ -105,8 +106,8 @@ BITWARDEN_USER=bitwarden
 BITWARDEN_HOME=/home/"$BITWARDEN_USER"
 # Database
 SHUF=$(shuf -i 25-29 -n 1)
-PGDB_PASS=$(gen_passwd "$SHUF" "a-zA-Z0-9@#*=")
-NEWPGPASS=$(gen_passwd "$SHUF" "a-zA-Z0-9@#*=")
+PGDB_PASS=$(gen_passwd "$SHUF" "a-zA-Z0-9@#*")
+NEWPGPASS=$(gen_passwd "$SHUF" "a-zA-Z0-9@#*")
 ncdb() {
     NCCONFIGDB=$(grep "dbname" $NCPATH/config/config.php | awk '{print $3}' | sed "s/[',]//g")
 }
@@ -148,13 +149,15 @@ PHP_FPM_DIR=/etc/php/$PHPVER/fpm
 PHP_INI=$PHP_FPM_DIR/php.ini
 PHP_POOL_DIR=$PHP_FPM_DIR/pool.d
 PHP_MODS_DIR=/etc/php/"$PHPVER"/mods-available
+# Notify push
+NOTIFY_PUSH_SERVICE_PATH="/etc/systemd/system/notify_push.service"
 # Adminer
 ADMINERDIR=/usr/share/adminer
 ADMINER_CONF="$SITES_AVAILABLE/adminer.conf"
 # Redis
 REDIS_CONF=/etc/redis/redis.conf
 REDIS_SOCK=/var/run/redis/redis-server.sock
-REDIS_PASS=$(gen_passwd "$SHUF" "a-zA-Z0-9@#*=")
+REDIS_PASS=$(gen_passwd "$SHUF" "a-zA-Z0-9@#*")
 # Extra security
 SPAMHAUS=/etc/spamhaus.wl
 ENVASIVE=/etc/apache2/mods-available/mod-evasive.load
@@ -173,11 +176,10 @@ turn_install() {
     TURN_PORT=3478
     TURN_DOMAIN=$(sudo -u www-data /var/www/nextcloud/occ config:system:get overwrite.cli.url | sed 's|https://||;s|/||')
     SHUF=$(shuf -i 25-29 -n 1)
-    TURN_SECRET=$(gen_passwd "$SHUF" "a-zA-Z0-9@#*=")
-    JANUS_API_KEY=$(gen_passwd "$SHUF" "a-zA-Z0-9@#*=")
-    NC_SECRET=$(gen_passwd "$SHUF" "a-zA-Z0-9@#*=")
+    TURN_SECRET=$(gen_passwd "$SHUF" "a-zA-Z0-9@#*")
+    JANUS_API_KEY=$(gen_passwd "$SHUF" "a-zA-Z0-9@#*")
+    NC_SECRET=$(gen_passwd "$SHUF" "a-zA-Z0-9@#*")
     SIGNALING_SERVER_CONF=/etc/signaling/server.conf
-    NONO_PORTS=(22 25 53 80 443 1024 3012 3306 5178 5179 5432 7867 7983 8983 10000 8081 8443 9443)
 }
 [ -n "$TURN_INSTALL" ] && turn_install # TODO: remove this line someday
 
@@ -370,7 +372,7 @@ get_newest_dat_files() {
         then
             print_text_in_color "$ICyan" "Downloading new IPv4 dat file..."
             sleep 1
-            check_command curl_to_dir "$GEOBLOCKDAT" "$IPV4_NAME" "$SCRIPTS"
+            curl_to_dir "$GEOBLOCKDAT" "$IPV4_NAME" "$SCRIPTS"
             mkdir -p /usr/share/GeoIP
             rm -f /usr/share/GeoIP/GeoIP.dat
             check_command cp "$SCRIPTS/$IPV4_NAME" /usr/share/GeoIP
@@ -396,7 +398,7 @@ get_newest_dat_files() {
         then
             print_text_in_color "$ICyan" "Downloading new IPv6 dat file..."
             sleep 1
-            check_command curl_to_dir "$GEOBLOCKDAT" "$IPV6_NAME" "$SCRIPTS"
+            curl_to_dir "$GEOBLOCKDAT" "$IPV6_NAME" "$SCRIPTS"
             mkdir -p /usr/share/GeoIP
             rm -f /usr/share/GeoIP/GeoIPv6.dat
             check_command cp "$SCRIPTS/$IPV6_NAME" /usr/share/GeoIP
@@ -511,7 +513,34 @@ then
     mkdir -p "$3"
 fi
     rm -f "$3"/"$2"
-    curl -sfL "$1"/"$2" -o "$3"/"$2"
+    if [ -n "$download_script_function_in_use" ]
+    then
+        curl -sfL "$1"/"$2" -o "$3"/"$2"
+    else
+        local retries=0
+        while :
+        do
+            if [ "$retries" -ge 10 ]
+            then
+                if yesno_box_yes "Tried 10 times but didn't succeed. We will now exit the script because it might break things. You can choose 'No' to continue on your own risk."
+                then
+                    exit 1
+                else
+                    return 1
+                fi
+            fi
+            if ! curl -sfL "$1"/"$2" -o "$3"/"$2"
+            then
+                msg_box "We just tried to fetch '$1/$2', but it seems like the server for the download isn't reachable, or that a temporary error occurred. We will now try again.
+Please report this issue to $ISSUES"
+                retries=$((retries+1))
+                print_text_in_color "$ICyan" "$retries of 10 retries."
+                countdown "Trying again in 30 seconds..." "30"
+            else
+                break
+            fi
+        done
+    fi
 }
 
 start_if_stopped() {
@@ -648,12 +677,12 @@ fi
 # Install dnsutils if not existing
 if ! dpkg-query -W -f='${Status}' "dnsutils" | grep -q "ok installed"
 then
-    apt update -q4 & spinner_loading && apt install dnsutils -y
+    apt-get update -q4 & spinner_loading && apt-get install dnsutils -y
 fi
 # Install net-tools if not existing
 if ! dpkg-query -W -f='${Status}' "net-tools" | grep -q "ok installed"
 then
-    apt update -q4 & spinner_loading && apt install net-tools -y
+    apt-get update -q4 & spinner_loading && apt-get install net-tools -y
 fi
 # After applying Netplan settings, try a DNS lookup.
 # Restart systemd-networkd if this fails and try again.
@@ -766,6 +795,74 @@ to validate them with the $f method. We have exhausted all the methods. Please c
 done
 }
 
+is_desec_installed() {
+# Check if deSEC is installed and add the needed variables if yes
+if [ -f "$SCRIPTS"/deSEC/.dedynauth ]
+then
+    if [ -f /etc/ddclient.conf ]
+    then
+        DEDYN_TOKEN=$(grep DEDYN_TOKEN "$SCRIPTS"/deSEC/.dedynauth | cut -d '=' -f2)
+        DEDYN_NAME=$(grep DEDYN_NAME "$SCRIPTS"/deSEC/.dedynauth | cut -d '=' -f2)
+        return 0
+    else
+        msg_box "It seems like deSEC isn't configured on this server.
+Please run 'sudo bash $SCRIPTS/menu.sh --> Server Configuration --> deSEC' to configure it."
+        return 1
+    fi
+fi
+}
+
+generate_desec_cert() {
+# Check if the hook is in place
+if [ ! -f "$SCRIPTS"/deSEC/hook.sh ]
+then
+    msg_box "Sorry, but it seems like the needed hook for this to work is missing.
+
+No TLS will be generated. Please report this to $ISSUES."
+    exit 1
+fi
+
+print_text_in_color "$ICyan" "Generating new TLS cert with DNS and deSEC, please don't abort the hook, it may take a while..."
+# Renew with DNS by default
+if certbot certonly --manual --text --rsa-key-size 4096 --renew-by-default --server https://acme-v02.api.letsencrypt.org/directory --no-eff-email --agree-tos --preferred-challenges dns --manual-auth-hook "$SCRIPTS"/deSEC/hook.sh --manual-cleanup-hook "$SCRIPTS"/deSEC/hook.sh -d "$1"
+then
+    # Generate DHparams cipher
+    if [ ! -f "$DHPARAMS_TLS" ]
+    then
+        openssl dhparam -dsaparam -out "$DHPARAMS_TLS" 4096
+    fi
+    # Choose which port for public access
+    msg_box "You will now be able to choose which port you want to put your Nextcloud on for public access.\n
+The default port is 443 for HTTPS and if you don't change port, that's the port we will use.\n
+Please keep in mind NOT to use the following ports as they are likely in use already:
+${NONO_PORTS[*]}"
+    if yesno_box_no "Do you want to change the default HTTPS port (443) to something else?"
+    then
+        # Ask for port
+        while :
+        do
+            DEDYNPORT=$(input_box_flow "Please choose which port you want between 1024 - 49151.\n\nPlease remember to open this port in your firewall.")
+            if (("$DEDYNPORT" >= 1024 && "$DEDYNPORT" <= 49151))
+            then
+                if check_nono_ports "$DEDYNPORT"
+                then
+                    print_text_in_color "$ICyan" "Changing to port $DEDYNPORT for public access..."
+                    # Main port
+                    if ! grep -q "Listen $DEDYNPORT" /etc/apache2/ports.conf
+                    then
+                        echo "Listen $DEDYNPORT" >> /etc/apache2/ports.conf
+                        restart_webserver
+                    fi
+                    break
+                fi
+            else
+                msg_box "The port number needs to be between 1024 - 49151, please try again."
+            fi
+        done
+    fi
+fi
+}
+
 # Last message depending on with script that is being run when using the generate_cert() function
 last_fail_tls() {
     msg_box "All methods failed. :/
@@ -808,7 +905,7 @@ cleanup_open_port() {
     if [ -n "$FAIL" ]
     then
         apt-get purge miniupnpc -y
-        apt autoremove -y
+        apt-get autoremove -y
     fi
 }
 
@@ -841,6 +938,43 @@ Please follow this guide to open ports in your router or firewall:\nhttps://www.
         exit 1
     fi
 fi
+}
+
+# $1=domain/ip-address
+add_to_trusted_domains() {
+    local element="$1"
+    local count=0
+    print_text_in_color "$ICyan" "Adding $element to trusted domains..."
+    while [ "$count" -le 10 ]
+    do
+        if [ "$(nextcloud_occ_no_check config:system:get trusted_domains "$count")" = "$element" ]
+        then
+            break
+        elif [ -z "$(nextcloud_occ_no_check config:system:get trusted_domains "$count")" ]
+        then
+            nextcloud_occ_no_check config:system:set trusted_domains "$count" --value="$element"
+            break
+        else
+            count=$((count+1))
+        fi
+    done
+}
+
+# $1=domain/ip-address
+remove_from_trusted_domains() {
+    local element="$1"
+    local count=0
+    print_text_in_color "$ICyan" "Removing $element from trusted domains..."
+    while [ "$count" -lt 10 ]
+    do
+        if [ "$(nextcloud_occ_no_check config:system:get trusted_domains "$count")" = "$element" ]
+        then
+            nextcloud_occ_no_check config:system:delete trusted_domains "$count"
+            break
+        else
+            count=$((count+1))
+        fi
+    done
 }
 
 check_distro_version() {
@@ -900,7 +1034,7 @@ fi
 install_if_not() {
 if ! dpkg-query -W -f='${Status}' "${1}" | grep -q "ok installed"
 then
-    apt update -q4 & spinner_loading && RUNLEVEL=1 apt install "${1}" -y
+    apt-get update -q4 & spinner_loading && RUNLEVEL=1 apt-get install "${1}" -y
 fi
 }
 
@@ -1145,6 +1279,7 @@ rm -f releases
 # e.g. download_script MENU additional_apps
 # Use it for functions like download_static_script
 download_script() {
+    download_script_function_in_use=yes
     rm -f "${SCRIPTS}/${2}.sh" "${SCRIPTS}/${2}.php" "${SCRIPTS}/${2}.py"
     if ! { curl_to_dir "${!1}" "${2}.sh" "$SCRIPTS" || curl_to_dir "${!1}" "${2}.php" "$SCRIPTS" || curl_to_dir "${!1}" "${2}.py" "$SCRIPTS"; }
     then
@@ -1223,15 +1358,12 @@ version_gt() {
 }
 
 spinner_loading() {
-    pid=$!
-    spin='-\|/'
-    i=0
-    while kill -0 $pid 2>/dev/null
-    do
-        i=$(( (i+1) %4 ))
-        printf "\r[${spin:$i:1}] " # Add text here, something like "Please be patient..." maybe?
-        sleep .1
+    printf '['
+    while ps "$!" > /dev/null; do
+        echo -n '⣾⣽⣻'
+        sleep '.7'
     done
+    echo ']'
 }
 
 any_key() {
@@ -1295,7 +1427,7 @@ https://shop.hanssonit.se/product/upgrade-between-major-owncloud-nextcloud-versi
 fi
 }
 
-# Check universe reposiroty
+# Check universe repository
 check_universe() {
 UNIV=$(apt-cache policy | grep http | awk '{print $3}' | grep universe | head -n 1 | cut -d "/" -f 2)
 if [ "$UNIV" != "universe" ]
@@ -1305,7 +1437,7 @@ then
 fi
 }
 
-# Check universe reposiroty
+# Check universe repository
 check_multiverse() {
 MULTIV=$(apt-cache policy | grep http | awk '{print $3}' | grep multiverse | head -n 1 | cut -d "/" -f 2)
 if [ "$MULTIV" != "multiverse" ]
@@ -1326,6 +1458,93 @@ else
         echo "vm.max_map_count=262144"
     } >> /etc/sysctl.conf
 fi
+}
+
+remove_collabora_docker() {
+    # Check if Collabora is previously installed
+    # If yes, then stop and prune the docker container
+    docker_prune_this 'collabora/code'
+    # Revoke LE
+    SUBDOMAIN=$(input_box_flow "Please enter the subdomain you are using for Collabora, e.g: office.yourdomain.com")
+    if [ -f "$CERTFILES/$SUBDOMAIN/cert.pem" ]
+    then
+        yes no | certbot revoke --cert-path "$CERTFILES/$SUBDOMAIN/cert.pem"
+        REMOVE_OLD="$(find "$LETSENCRYPTPATH/" -name "$SUBDOMAIN*")"
+        for remove in $REMOVE_OLD
+            do rm -rf "$remove"
+        done
+    fi
+    # Remove Apache2 config
+    if [ -f "$SITES_AVAILABLE/$SUBDOMAIN.conf" ]
+    then
+        a2dissite "$SUBDOMAIN".conf
+        restart_webserver
+        rm -f "$SITES_AVAILABLE/$SUBDOMAIN.conf"
+    fi
+    # Disable RichDocuments (Collabora App) if activated
+    if is_app_installed richdocuments
+    then
+        nextcloud_occ app:remove richdocuments
+    fi
+    # Remove trusted domain
+    remove_from_trusted_domains "$SUBDOMAIN"
+}
+
+remove_onlyoffice_docker() {
+    # Check if Onlyoffice is previously installed
+    # If yes, then stop and prune the docker container
+    docker_prune_this 'onlyoffice/documentserver'
+    # Revoke LE
+    SUBDOMAIN=$(input_box_flow "Please enter the subdomain you are using for OnlyOffice, e.g: office.yourdomain.com")
+    if [ -f "$CERTFILES/$SUBDOMAIN/cert.pem" ]
+    then
+        yes no | certbot revoke --cert-path "$CERTFILES/$SUBDOMAIN/cert.pem"
+        REMOVE_OLD="$(find "$LETSENCRYPTPATH/" -name "$SUBDOMAIN*")"
+        for remove in $REMOVE_OLD
+            do rm -rf "$remove"
+        done
+    fi
+    # Remove Apache2 config
+    if [ -f "$SITES_AVAILABLE/$SUBDOMAIN.conf" ]
+    then
+        a2dissite "$SUBDOMAIN".conf
+        restart_webserver
+        rm -f "$SITES_AVAILABLE/$SUBDOMAIN.conf"
+    fi
+    # Disable onlyoffice if activated
+    if is_app_installed onlyoffice
+    then
+        nextcloud_occ app:remove onlyoffice
+    fi
+    # Remove trusted domain
+    remove_from_trusted_domains "$SUBDOMAIN"
+}
+
+# Remove all office apps
+remove_all_office_apps() {
+    # remove OnlyOffice-documentserver if installed
+    if is_app_installed documentserver_community
+    then
+        nextcloud_occ app:remove documentserver_community
+    fi
+
+    # Disable OnlyOffice App if installed
+    if is_app_installed onlyoffice
+    then
+        nextcloud_occ app:remove onlyoffice
+    fi
+
+    # remove richdocumentscode-documentserver if installed
+    if is_app_installed richdocumentscode
+    then
+        nextcloud_occ app:remove richdocumentscode
+    fi
+
+    # Disable RichDocuments (Collabora App) if installed
+    if is_app_installed richdocuments
+    then
+        nextcloud_occ app:remove richdocuments
+    fi
 }
 
 # Check if docker is installed
@@ -1350,7 +1569,7 @@ then
     is_process_running dpkg
     is_process_running apt
     print_text_in_color "$ICyan" "Installing Docker CE..."
-    apt update -q4 & spinner_loading
+    apt-get update -q4 & spinner_loading
     install_if_not curl
     curl -fsSL get.docker.com | sh
 fi
@@ -1458,9 +1677,9 @@ fi
 home_sme_server() {
 # OLD DISKS: "Samsung SSD 860" || ST5000LM000-2AN1  || ST5000LM015-2E81
 # OLD MEMORY: BLS16G4 (Balistix Sport) || 18ASF2G72HZ (ECC)
-if lshw -c system | grep -q "NUC8i3BEH\|NUC10i3FNH"
+if lshw -c system | grep -q "NUC8i3BEH\|NUC10i3FNH\|PN50\|PN51"
 then
-    if lshw -c memory | grep -q "BLS16G4\|18ASF2G72HZ\|16ATF2G64HZ\|CT16G4SFD8266\|M471A4G43MB1\|9905744-076"
+    if lshw -c memory | grep -q "BLS16G4\|18ASF2G72HZ\|16ATF2G64HZ\|CT16G4SFD8266\|M471A4G43MB1\|9905744\|HMA82GS6JJR8N\|HMA82GS6CJR8N"
     then
         if lshw -c disk | grep -q "ST2000LM015-2E81\|WDS400\|ST5000LM000-2AN1\|ST5000LM015-2E81\|Samsung SSD 860\|WDS500G1R0B"
         then
@@ -1484,6 +1703,14 @@ case "${1}" in
     ''|*[!0-9]*) return 1 ;;
     *) return 0 ;;
 esac
+}
+
+# Prettify Json files
+# $1 = json input
+prettify_json() {
+    local JSON_INPUT
+    JSON_INPUT="$(echo "$1" | sed 's|\\||g' | sed 's|,"|,\\n  "|g;s|":|": |g;s|{"|{\n  "|;s|"}|"\n}|')"
+    echo -e "$JSON_INPUT"
 }
 
 # Example:
@@ -1661,6 +1888,23 @@ then
     check_command echo "exit" >> "$SCRIPTS/dockerprune.sh"
     chmod a+x "$SCRIPTS"/dockerprune.sh
     print_text_in_color "$IGreen" "Docker automatic prune job added."
+fi
+}
+
+test_nono_ports() {
+  local e match="$1"
+  shift
+  for e; do [[ "$e" == "$match" ]] && return 0; done
+  return 1
+}
+
+check_nono_ports() {
+if test_nono_ports "${1}" "${NONO_PORTS[@]}"
+then
+    msg_box "You have to choose another port than $1. Please start over.\n
+Please keep in mind NOT to use the following ports as they are likely in use already:
+${NONO_PORTS[*]}"
+    return 1
 fi
 }
 
